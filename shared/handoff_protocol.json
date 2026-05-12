@@ -1,0 +1,29 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "HandoffProtocol",
+  "description": "Defines the structure for summarizing context when handing off tasks between models.",
+  "type": "object",
+  "properties": {
+    "source_model": { "type": "string" },
+    "target_model": { "type": "string" },
+    "handoff_summary": {
+      "type": "object",
+      "properties": {
+        "core_logic_status": { "type": "string", "description": "Current state of the main reasoning path." },
+        "critical_variables": { "type": "object", "description": "Key values/data points that must persist." },
+        "last_action_result": { "type": "string" },
+        "next_immediate_step": { "type": "string" }
+      },
+      "required": ["core_logic_status", "next_immediate_step"]
+    },
+    "context_compression_meta": {
+      "type": "object",
+      "properties": {
+        "original_token_count": { "type": "integer" },
+        "compressed_token_count": { "type": "integer" },
+        "compression_method": { "enum": ["summary", "vector_rag", "truncation"] }
+      }
+    }
+  },
+  "required": ["source_model", "target_model", "handoff_summary"]
+}

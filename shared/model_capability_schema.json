@@ -1,0 +1,41 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ModelCapabilitySchema",
+  "description": "Defines the specific capabilities and limits of an AI model to guide the Router.",
+  "type": "object",
+  "properties": {
+    "model_id": { "type": "string" },
+    "provider": { "type": "string" },
+    "context_window": {
+      "type": "integer",
+      "description": "Maximum token limit for the context window."
+    },
+    "max_output_tokens": { "type": "integer" },
+    "supported_modalities": {
+      "type": "array",
+      "items": { "enum": ["text", "vision", "audio", "video", "tool_use"] }
+    },
+    "tool_use_accuracy": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1,
+      "description": "Historical or benchmarked accuracy for tool calling."
+    },
+    "performance_tier": { "enum": ["ultra", "high", "medium", "low"] },
+    "pricing": {
+      "type": "object",
+      "properties": {
+        "input_per_1k": { "type": "number" },
+        "output_per_1k": { "type": "number" }
+      }
+    },
+    "limits": {
+      "type": "object",
+      "properties": {
+        "rpm": { "type": "integer", "description": "Requests per minute." },
+        "tpm": { "type": "integer", "description": "Tokens per minute." }
+      }
+    }
+  },
+  "required": ["model_id", "provider", "context_window", "supported_modalities"]
+}

@@ -1,0 +1,40 @@
+{
+  "mappings": [
+    {
+      "model_family": "gemini",
+      "preferred_format": "json",
+      "tool_call_template": "Direct JSON object in the response body.",
+      "few_shot_examples": [
+        {
+          "tool_name": "search_database",
+          "user_intent": "查找 2023 年的所有銷售紀錄",
+          "expected_output": "{\"name\": \"search_database\", \"parameters\": {\"query\": \"sales 2023\"}}"
+        }
+      ]
+    },
+    {
+      "model_family": "deepseek",
+      "preferred_format": "markdown_block",
+      "tool_call_template": "JSON wrapped in a markdown block.",
+      "few_shot_examples": [
+        {
+          "tool_name": "search_database",
+          "user_intent": "查找 2023 年的所有銷售紀錄",
+          "expected_output": "```json\n{\"name\": \"search_database\", \"parameters\": {\"query\": \"sales 2023\"}}\n```"
+        }
+      ]
+    },
+    {
+      "model_family": "llama-nvidianim",
+      "preferred_format": "xml",
+      "tool_call_template": "<tool_call>...</tool_call> tags.",
+      "few_shot_examples": [
+        {
+          "tool_name": "search_database",
+          "user_intent": "查找 2023 年的所有銷售紀錄",
+          "expected_output": "<tool_call>{\"name\": \"search_database\", \"parameters\": {\"query\": \"sales 2023\"}}</tool_call>"
+        }
+      ]
+    }
+  ]
+}

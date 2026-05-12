@@ -1,0 +1,35 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "AgentToolDefinition",
+  "description": "Standard schema for defining tools within the Antigravity Agent OS.",
+  "type": "object",
+  "properties": {
+    "name": {
+      "type": "string",
+      "description": "Unique identifier for the tool."
+    },
+    "description": {
+      "type": "string",
+      "description": "Clear explanation of what the tool does for LLM consumption."
+    },
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "type": { "const": "object" },
+        "properties": { "type": "object" },
+        "required": { "type": "array", "items": { "type": "string" } }
+      },
+      "required": ["type", "properties"]
+    },
+    "metadata": {
+      "type": "object",
+      "properties": {
+        "priority": { "enum": ["high", "medium", "low"], "default": "medium" },
+        "estimated_latency": { "type": "string", "description": "e.g., '100ms', '2s'" },
+        "cost_per_invocation": { "type": "number", "default": 0 },
+        "is_destructive": { "type": "boolean", "default": false }
+      }
+    }
+  },
+  "required": ["name", "description", "parameters"]
+}

@@ -1,0 +1,32 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "PromptMapping",
+  "description": "Mapping of model-specific preferences and few-shot examples for tool calling.",
+  "type": "object",
+  "properties": {
+    "mappings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "model_family": { "type": "string", "description": "e.g., 'gemini', 'deepseek', 'llama'" },
+          "preferred_format": { "enum": ["json", "xml", "markdown_block"] },
+          "tool_call_template": { "type": "string", "description": "Template for how the model should structure its call." },
+          "few_shot_examples": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "tool_name": { "type": "string" },
+                "user_intent": { "type": "string" },
+                "expected_output": { "type": "string" }
+              }
+            }
+          }
+        },
+        "required": ["model_family", "preferred_format", "few_shot_examples"]
+      }
+    }
+  },
+  "required": ["mappings"]
+}

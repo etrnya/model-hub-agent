@@ -1,0 +1,26 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "SilentFixRegistry",
+  "description": "A registry of common LLM formatting errors and their corresponding fix strategies.",
+  "type": "object",
+  "properties": {
+    "common_fixes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "error_type": { "type": "string", "description": "e.g., 'extra_backticks', 'unclosed_json', 'trailing_comma'" },
+          "pattern": { "type": "string", "description": "Regex pattern to detect the error." },
+          "replacement": { "type": "string", "description": "Replacement string or fix strategy name." },
+          "description": { "type": "string" }
+        },
+        "required": ["error_type", "pattern", "replacement"]
+      }
+    },
+    "dynamic_rules": {
+      "type": "object",
+      "description": "Rules for structural fixes like adding missing closing braces based on stack depth."
+    }
+  },
+  "required": ["common_fixes"]
+}

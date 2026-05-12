@@ -1,0 +1,19 @@
+model: llama3-8b
+provider: ollama
+endpoint: "http://localhost:11434"
+capabilities:
+  - formatting: excellent
+  - summarization: good
+  - privacy_friendly: true
+  - cost: zero
+  - deterministic: true
+
+prompt_templates:
+  system_format: "markdown"
+  style: "direct"
+
+context_window: 8192
+preferred_roles:
+  - privacy_filter
+  - local_formatter
+  - evidence_sorter

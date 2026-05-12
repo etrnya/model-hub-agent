@@ -1,0 +1,31 @@
+{
+  "name": "model-hub-agent",
+  "version": "1.0.0",
+  "description": "Antigravity AI Kernel - Industrial-grade Agent OS for resilient multi-model orchestration.",
+  "main": "main.js",
+  "scripts": {
+    "start": "node main.js",
+    "cli": "node cli.js",
+    "test": "node tests/test_integration.js",
+    "test:guardrail": "node tests/test_guardrail.js"
+  },
+  "keywords": [
+    "antigravity",
+    "agent-os",
+    "ai-kernel",
+    "orchestration",
+    "multi-model",
+    "failover",
+    "prompt-injection-defense"
+  ],
+  "author": "Antigravity Team",
+  "license": "MIT",
+  "dependencies": {
+    "ajv": "^8.12.0",
+    "ajv-formats": "^2.1.1",
+    "dotenv": "^17.4.2"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

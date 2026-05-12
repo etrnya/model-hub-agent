@@ -1,0 +1,35 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "GlobalStateSnapshot",
+  "type": "object",
+  "properties": {
+    "task_id": { "type": "string" },
+    "version": { "type": "integer", "default": 1 },
+    "timestamp": { "type": "string", "format": "date-time" },
+    "current_phase": { "enum": ["planning", "coding", "verifying", "finalizing"] },
+    "objective": { "type": "string" },
+    "constraints": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "change_log": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "step": { "type": "integer" },
+          "role": { "type": "string" },
+          "action": { "type": "string" },
+          "timestamp": { "type": "string" }
+        }
+      }
+    },
+    "completed_subtasks": { "type": "array", "items": { "type": "string" } },
+    "pending_subtasks": { "type": "array", "items": { "type": "string" } },
+    "critical_data": {
+      "type": "object",
+      "description": "存放各模型傳遞的關鍵結構化數據，防止漂移"
+    }
+  },
+  "required": ["task_id", "version", "current_phase", "objective"]
+}

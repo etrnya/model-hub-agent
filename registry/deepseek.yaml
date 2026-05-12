@@ -1,0 +1,22 @@
+model: deepseek-v3
+provider: deepseek
+capabilities:
+  - coding: excellent
+  - reasoning: high
+  - speed: fast
+  - deterministic: false
+  - privacy_friendly: false
+
+prompt_templates:
+  system_format: "xml"  # DeepSeek V3 對 XML 格式的 System Prompt 響應較佳
+  thinking_block: true  # 啟動思考鏈模式
+  style: "concise"
+
+context_window: 128000
+pricing:
+  tier: cheap
+  input_per_1m: 0.27
+
+preferred_roles:
+  - coder
+  - unit_tester
