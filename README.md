@@ -1,4 +1,8 @@
-# Antigravity Agent OS
+# Antigravity Agent OS (AI Agent Kernel)
+
+[English](README.md) | [繁體中文](README_ZH.md)
+
+**Antigravity Agent OS** is an industrial-grade, highly resilient AI orchestration kernel.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 

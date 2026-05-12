@@ -1,5 +1,7 @@
 # Antigravity Agent OS (AI 代理作業系統內核)
 
+[English](README.md) | [繁體中文](README_ZH.md)
+
 **Antigravity Agent OS** 是一個工業級、具備高韌性的 AI 調度內核。它不僅僅是一個模型切換器，更是一個能主動防禦外部 API 不穩定性、優化上下文空間並嚴格控制成本的「代理作業系統」。
 
 ## 🌟 核心價值
