@@ -1,6 +1,6 @@
 require('dotenv').config();
-const NvidiaNimClient = require('./infrastructure/clients/nvidia_nim_client');
-const modelRegistry = require('./registry/model_registry');
+const NvidiaNimClient = require('../infrastructure/clients/nvidia_nim_client');
+const modelRegistry = require('../registry/model_registry');
 
 async function runTest() {
   console.log("🚀 開始測試 NvidiaNimClient...");

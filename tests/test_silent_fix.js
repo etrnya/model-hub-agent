@@ -1,4 +1,4 @@
-const SchemaValidator = require('./infrastructure/adapters/schema_validator');
+const SchemaValidator = require('../infrastructure/adapters/schema_validator');
 
 const validator = new SchemaValidator();
 

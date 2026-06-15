@@ -1,4 +1,4 @@
-const ContextCompressor = require('./infrastructure/adapters/context_compressor');
+const ContextCompressor = require('../infrastructure/adapters/context_compressor');
 
 async function testCompression() {
   const compressor = new ContextCompressor();

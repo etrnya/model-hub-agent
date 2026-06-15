@@ -1,8 +1,8 @@
 require('dotenv').config();
-const DeepSeekClient = require('./infrastructure/clients/deepseek_client');
-const GeminiClient = require('./infrastructure/clients/gemini_client');
-const NvidiaNimClient = require('./infrastructure/clients/nvidia_nim_client');
-const verificationGate = require('./services/verification_gate');
+const DeepSeekClient = require('../infrastructure/clients/deepseek_client');
+const GeminiClient = require('../infrastructure/clients/gemini_client');
+const NvidiaNimClient = require('../infrastructure/clients/nvidia_nim_client');
+const verificationGate = require('../services/verification_gate');
 
 // 1. Client Factory: Returns the correct client instance based on the router's choice
 function clientFactory(modelCapability) {

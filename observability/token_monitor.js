@@ -27,18 +27,21 @@ class TokenMonitor {
     this.usageByProvider[providerKey].used += totalCurrentUsed;
     this.usageByProvider[providerKey].saved += saved;
 
+    const limit = this.usageByProvider[providerKey].limit;
+    const quotaUsedPercent = limit > 0 ? (this.usageByProvider[providerKey].used / limit * 100).toFixed(2) : '0.00';
+
     const event = {
       timestamp: new Date().toISOString(),
       provider: providerKey,
       totalUsed: totalCurrentUsed,
       saved: saved,
-      quotaUsed: ((this.usageByProvider[providerKey].used / this.usageByProvider[providerKey].limit) * 100).toFixed(2) + '%'
+      quotaUsed: quotaUsedPercent + '%'
     };
 
     this.history.push(event);
 
     // 預警機制
-    if (parseFloat(event.quotaUsed) > 90) {
+    if (limit > 0 && parseFloat(quotaUsedPercent) > 90) {
       console.warn(`\n🚨 [QUOTA ALERT] ${providerKey.toUpperCase()} 已使用 ${event.quotaUsed} 的額度，請注意！`);
     }
 
@@ -48,10 +51,11 @@ class TokenMonitor {
   getSummary() {
     const summary = {};
     Object.keys(this.usageByProvider).forEach(p => {
+      const limit = this.usageByProvider[p].limit;
       summary[p.toUpperCase()] = {
         "已用 Token": this.usageByProvider[p].used,
         "省下 Token": this.usageByProvider[p].saved,
-        "額度使用率": ((this.usageByProvider[p].used / this.usageByProvider[p].limit) * 100).toFixed(2) + '%'
+        "額度使用率": limit > 0 ? ((this.usageByProvider[p].used / limit) * 100).toFixed(2) + '%' : '0.00%'
       };
     });
     return summary;

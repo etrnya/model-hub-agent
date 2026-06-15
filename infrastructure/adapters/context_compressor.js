@@ -68,7 +68,8 @@ class ContextCompressor {
     
     // Record to monitor
     const tokenMonitor = require('../../observability/token_monitor');
-    tokenMonitor.record(currentTokens, this.tokenEstimator(JSON.stringify(result)), 0); 
+    const provider = (targetCapability && targetCapability.provider) || 'system';
+    tokenMonitor.record(provider, currentTokens, this.tokenEstimator(JSON.stringify(result)), 0); 
 
     return result;
   }
