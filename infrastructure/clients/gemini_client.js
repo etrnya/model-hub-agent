@@ -9,8 +9,35 @@ class GeminiClient extends BaseClient {
   constructor(config = {}) {
     super(config);
     this.apiKey = process.env.GEMINI_API_KEY;
-    if (!this.apiKey) {
-      console.warn("[GeminiClient] GEMINI_API_KEY environment variable is not set.");
+    this.gcpKeyPath = process.env.GCP_KEY_PATH;
+    if (!this.apiKey && !this.gcpKeyPath) {
+      console.warn("[GeminiClient] Neither GEMINI_API_KEY nor GCP_KEY_PATH environment variable is set.");
+    }
+    this._token = null;
+    this._tokenExpiry = 0;
+  }
+
+  /**
+   * Generates a temporary OAuth2 Access Token using gcp-key.json.
+   * Caches the token for up to 1 hour to prevent redundant auth requests.
+   */
+  async _getAccessToken() {
+    if (this._token && this._tokenExpiry > Date.now() + 60000) {
+      return this._token;
+    }
+    try {
+      const { GoogleAuth } = require('google-auth-library');
+      const auth = new GoogleAuth({
+        keyFile: this.gcpKeyPath,
+        scopes: ['https://www.googleapis.com/auth/generative-language']
+      });
+      const client = await auth.getClient();
+      const tokenResponse = await client.getAccessToken();
+      this._token = tokenResponse.token;
+      this._tokenExpiry = Date.now() + 3500000; // Standard 1 hour expiry
+      return this._token;
+    } catch (e) {
+      throw new Error(`Failed to generate GCP access token: ${e.message}`);
     }
   }
 
@@ -21,8 +48,20 @@ class GeminiClient extends BaseClient {
    * @returns {string} The raw string output from the model.
    */
   async _callModelApi(payload, outputSchema) {
-    if (!this.apiKey) {
-      throw new Error("Missing Gemini API Key. Please set GEMINI_API_KEY in .env");
+    let url;
+    const headers = {
+      "Content-Type": "application/json"
+    };
+
+    if (this.gcpKeyPath) {
+      const token = await this._getAccessToken();
+      headers["Authorization"] = `Bearer ${token}`;
+      url = `https://generativelanguage.googleapis.com/v1beta/models/${this.modelCapability.model_id}:generateContent`;
+    } else {
+      if (!this.apiKey) {
+        throw new Error("Missing Gemini API Key. Please set GEMINI_API_KEY or GCP_KEY_PATH in .env");
+      }
+      url = `https://generativelanguage.googleapis.com/v1beta/models/${this.modelCapability.model_id}:generateContent?key=${this.apiKey}`;
     }
 
     // Format the payload for Gemini API
@@ -46,14 +85,10 @@ class GeminiClient extends BaseClient {
       }
     };
 
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${this.modelCapability.model_id}:generateContent?key=${this.apiKey}`;
-
     try {
       const response = await fetch(url, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json"
-        },
+        headers: headers,
         body: JSON.stringify(requestBody)
       });
 
