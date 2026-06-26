@@ -53,7 +53,8 @@ class NvidiaNimClient extends BaseClient {
           model: this.modelCapability.model_id,
           messages: messages,
           temperature: 0.2, // Low temperature for deterministic output
-          max_tokens: this.modelCapability.max_output_tokens || 4096
+          max_tokens: this.modelCapability.max_output_tokens || 4096,
+          response_format: { type: "json_object" }
         })
       });
 

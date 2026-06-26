@@ -54,9 +54,11 @@ class DualVerificationGate {
 
     // Ensure we don't use the same model instance
     if (validatorModel.model_id === primaryModelId) {
-       // Fallback to a different provider if possible
+       // Fallback to a different provider if possible (preferring non-low tier first)
        const modelRegistry = require('../registry/model_registry');
-       validatorModel = modelRegistry.models.find(m => m.model_id !== primaryModelId && m.performance_tier === 'base') || validatorModel;
+       validatorModel = modelRegistry.models.find(m => m.provider !== context.primaryProvider && m.performance_tier !== 'low') || 
+                        modelRegistry.models.find(m => m.provider !== context.primaryProvider) || 
+                        validatorModel;
     }
 
     console.log(`🔍 [VerificationGate] Auditor selected: ${validatorModel.model_id} (${validatorModel.provider})`);

@@ -29,17 +29,17 @@ async function runIntegrationTest() {
   console.log("🚀 [Agent OS] 開始執行跨模型整合測試 (DeepSeek 草擬 -> Gemini 審核)\n");
 
   // ==========================================
-  // 階段 1: NVIDIA 負責草擬 (Drafting Phase)
+  // 階段 1: Gemini 負責草擬 (Drafting Phase)
   // ==========================================
-  console.log("📝 [Phase 1] 指派任務給 NVIDIA Llama 8B...");
+  console.log("📝 [Phase 1] 指派任務給 Google Gemini...");
   
   const primaryCapability = {
-    model_id: "meta/llama-3.1-8b-instruct",
-    provider: "nvidia-nim",
-    context_window: 128000,
+    model_id: "gemini-2.5-flash",
+    provider: "google",
+    context_window: 1000000,
     supported_modalities: ["text"],
-    performance_tier: "high",
-    limits: { rpm: 50, tpm: 100000 }
+    performance_tier: "base",
+    limits: { rpm: 15, tpm: 1000000 }
   };
 
   const drafter = clientFactory(primaryCapability);
@@ -80,7 +80,9 @@ async function runIntegrationTest() {
   // 模擬傳入 Context
   const verificationContext = {
     task_id: draftContext.task_id,
-    taskDescription: draftContext.objective,
+    objective: draftContext.objective,
+    constraints: draftContext.constraints,
+    tags: ["coding"],
     primaryModelId: primaryCapability.model_id,
     primaryProvider: primaryCapability.provider
   };

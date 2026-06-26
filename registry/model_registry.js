@@ -10,11 +10,11 @@ class ModelRegistry {
         provider: "nvidia-nim",
         context_window: 128000,
         supported_modalities: ["text"],
-        performance_tier: "base",
+        performance_tier: "low",
         limits: { rpm: 50, tpm: 100000 }
       },
       {
-        model_id: "gemini-1.5-flash",
+        model_id: "gemini-2.5-flash",
         provider: "google",
         context_window: 1000000,
         supported_modalities: ["text", "vision", "audio", "tool_use"],
@@ -30,9 +30,9 @@ class ModelRegistry {
         limits: { rpm: 100, tpm: 100000 }
       },
       {
-        model_id: "llama-3-70b-instruct",
+        model_id: "meta/llama-3.1-70b-instruct",
         provider: "nvidia-nim",
-        context_window: 8000,
+        context_window: 128000,
         supported_modalities: ["text", "tool_use"],
         performance_tier: "high",
         limits: { rpm: 50, tpm: 50000 }
