@@ -519,22 +519,14 @@
             <ol class="step-ol">
               <li>登入 <strong><a href="https://console.cloud.google.com/" target="_blank" style="color: #60a5fa;">Google Cloud 控制台</a></strong>，確認切換至後付款專案 <strong><code>gemini-api-ai-assistant</code></strong>。</li>
               <li>點擊左上角主選單 ☰，前往 <strong>「IAM 和管理 (IAM & Admin)」</strong> ➔ 點擊 <strong>「服務帳戶 (Service Accounts)」</strong>。</li>
-              
-              <!-- Image 4 -->
-              <div class="image-container">
-                <div class="image-title">🔑 服務帳戶管理頁面</div>
-                <img src="assets/4_gcp_credits_unused.png" alt="GCP Service Accounts Page">
-                <span class="image-desc">在控制台的服務帳戶清單中，可以看見自動或手動建立的服務帳戶（例如 <code>vertex-express</code>）。</span>
-              </div>
-
               <li>點擊頂部 <strong>「+ 建立服務帳戶」</strong>，填寫名稱（例如 <code>vertex-express</code>）並建立。</li>
               <li>建立後，在服務帳戶清單中點擊您剛建立的帳戶，切換到 <strong>「金鑰 (Keys)」</strong> 標籤頁。</li>
               <li>點擊 <strong>「新增金鑰 (Add Key)」</strong> ➔ 選擇 <strong>「建立新金鑰 (Create new key)」</strong> ➔ 選擇 <strong>JSON</strong> 格式下載。</li>
 
-              <!-- Image 5 -->
+              <!-- Image 4 -->
               <div class="image-container">
                 <div class="image-title">🔑 下載 JSON 憑證金鑰</div>
-                <img src="assets/5_difficulty1_keys.png" alt="Difficulty 1 Keys">
+                <img src="assets/4_gcp_credits_unused.png" alt="Difficulty 1 Keys">
                 <span class="image-desc">切換至服務帳戶的「金鑰 (Keys)」頁面，新增並下載 JSON 格式的私鑰，妥善保存於專案目錄中。</span>
               </div>
 
@@ -556,15 +548,23 @@
               <li>點擊該列右側的 **「編輯 (鉛筆圖示)」**；或若不在列表中，點擊頂部 **「授予存取權」** 並填入該 email。</li>
               <li>點擊 **「新增其他角色」**，在搜尋框中輸入 <code>Agent Platform</code>。</li>
               <li>點選 **`Agent Platform 使用者`（即舊版 `Vertex AI User`，英文名稱為 `Agent Platform User`）** 角色。</li>
+
+              <!-- Image 6 -->
+              <div class="image-container">
+                <div class="image-title">🛡️ GCP IAM 選擇角色權限</div>
+                <img src="assets/6_difficulty2_iam.png" alt="GCP IAM Role Selection">
+                <span class="image-desc">在角色下拉選單中搜尋並選擇 <strong>`Agent Platform 使用者`</strong> 角色。</span>
+              </div>
+
               <li>點擊 **「儲存」**。等待約 30 秒至 1 分鐘，權限即會在全球 GCP 節點生效。</li>
+
+              <!-- Image 5 -->
+              <div class="image-container">
+                <div class="image-title">🛡️ 服務帳戶 IAM 權限配置完成</div>
+                <img src="assets/5_difficulty1_keys.png" alt="Service Account Role Added">
+                <span class="image-desc">設定完成後，在 IAM 列表內應確認該服務帳戶已成功關聯 <strong>`Agent Platform 使用者`</strong> 角色權限。</span>
+              </div>
             </ol>
-            
-            <!-- Image 6 -->
-            <div class="image-container">
-              <div class="image-title">🛡️ GCP IAM 服務帳戶權限設定</div>
-              <img src="assets/6_difficulty2_iam.png" alt="GCP IAM Role Settings">
-              <span class="image-desc">在 GCP IAM 授權頁面，搜尋並將 <strong>`Agent Platform 使用者`</strong>（英文為 <code>Agent Platform User</code>）角色授予您的服務帳戶，以啟動預測與模型呼叫能力。</span>
-            </div>
 
             <div class="step-tip">
               <strong>注意：</strong>請不要誤選為 <code>Vertex AI 服務代理</code>（這是 Google 的系統內部代理角色），外部 API 呼叫必須使用 <strong>`Agent Platform 使用者`（舊版 `Vertex AI User`）</strong> 才能擁有模型預測與呼叫權限。
