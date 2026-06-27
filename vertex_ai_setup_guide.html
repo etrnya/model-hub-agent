@@ -439,27 +439,27 @@
           <!-- Difficulty 2 -->
           <div class="step-card">
             <span class="step-badge">Difficulty 02</span>
-            <div class="step-title">在 GCP IAM 正確授權「Agent Platform 使用者 (Agent Platform User)」</div>
+            <div class="step-title">在 GCP IAM 正確授權「Agent Platform 使用者」（即舊版 Vertex AI User）</div>
             <ol class="step-ol">
               <li>進入 <strong><a href="https://console.cloud.google.com/iam-admin/iam?project=gemini-api-ai-assistant" target="_blank" style="color: #60a5fa;">GCP IAM 控制台頁面</a></strong>。</li>
               <li>在清單中找到您的服務帳戶 <code>vertex-express@gemini-api-ai-assistant.iam.gserviceaccount.com</code>。</li>
               <li>點擊該列右側的 **「編輯 (鉛筆圖示)」**；或若不在列表中，點擊頂部 **「授予存取權」** 並填入該 email。</li>
               <li>點擊 **「新增其他角色」**，在搜尋框中輸入 <code>Agent Platform</code>。</li>
-              <li>點選 **`Agent Platform 使用者` (即 `Agent Platform User`)** 角色。</li>
+              <li>點選 **`Agent Platform 使用者`（即舊版 `Vertex AI User`，英文名稱為 `Agent Platform User`）** 角色。</li>
               <li>點擊 **「儲存」**。等待約 30 秒至 1 分鐘，權限即會在全球 GCP 節點生效。</li>
             </ol>
             <div class="step-tip">
-              <strong>注意：</strong>請不要誤選為 <code>Vertex AI 服務代理</code>（這是 Google 的系統內部代理角色），外部 API 呼叫必須使用 <strong>`Agent Platform 使用者` (Agent Platform User)</strong> 才能擁有模型預測與呼叫權限。
+              <strong>注意：</strong>請不要誤選為 <code>Vertex AI 服務代理</code>（這是 Google 的系統內部代理角色），外部 API 呼叫必須使用 <strong>`Agent Platform 使用者`（舊版 `Vertex AI User`）</strong> 才能擁有模型預測與呼叫權限。
             </div>
           </div>
 
           <!-- Difficulty 3 -->
           <div class="step-card">
             <span class="step-badge">Difficulty 03</span>
-            <div class="step-title">在專案 API 庫啟用 Vertex AI (Agent Platform) API 服務</div>
+            <div class="step-title">在專案 API 庫啟用「Agent Platform API」服務（即舊版 Vertex AI API）</div>
             <ol class="step-ol">
               <li>直接點擊此專屬連結進入 API 程式庫：<br>👉 <strong><a href="https://console.cloud.google.com/apis/library/aiplatform.googleapis.com?project=gemini-api-ai-assistant" target="_blank" style="color: #60a5fa;">啟用 Agent Platform API 連結</a></strong></li>
-              <li>在頁面中確認顯示的 API 名稱為 <strong>`Agent Platform API`</strong> (或 <code>Vertex AI API</code>)。</li>
+              <li>在頁面中確認顯示的 API 名稱為 <strong>`Agent Platform API`</strong>（即舊版 <code>Vertex AI API</code>，服務名稱為 <code>aiplatform.googleapis.com</code>）。</li>
               <li>若按鈕顯示為藍色 <strong>「啟用 (Enable)」</strong>，請點擊它。若顯示「API 已啟用」，代表該專案已具備 Vertex AI 執行環境。</li>
             </ol>
             <div class="step-tip">
