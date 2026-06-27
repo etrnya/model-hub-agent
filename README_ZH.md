@@ -54,7 +54,9 @@ graph TD
     ```
 
 2.  **配置環境變數**：
-    將 `.env.example` 複製為 `.env` 並填入您的 API Keys。
+    將 `.env.example` 複製為 `.env` 並填入您的 API Keys，以及 `GCP_KEY_PATH`（指向您的 GCP 服務帳戶 JSON 金鑰路徑，例如 `gcp-key.json`）。
+    
+    *詳細的 GCP Vertex AI 啟用與授權設定，請參考 [vertex_ai_setup_guide.html](vertex_ai_setup_guide.html) (本機說明網頁)。*
 
 3.  **執行互動式指令 (推薦)**：
     ```bash

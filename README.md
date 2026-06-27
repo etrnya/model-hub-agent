@@ -62,6 +62,9 @@ graph TD
     - `NVIDIA_API_KEY`
     - `GEMINI_API_KEY`
     - `DEEPSEEK_API_KEY`
+    - `GCP_KEY_PATH` (Set to the absolute path of your GCP Service Account JSON key, e.g., `gcp-key.json`)
+
+    *For GCP Vertex AI setup details, please refer to [vertex_ai_setup_guide.html](vertex_ai_setup_guide.html) (Local File).*
 
 3.  **Run the Kernel**:
     ```bash
@@ -73,6 +76,7 @@ Unit tests for all core modules are located in the `tests/` directory.
 ```bash
 node tests/test_silent_fix.js
 node tests/test_compression.js
+node tests/test_vertex_ai.js
 ```
 
 ## 🙏 Acknowledgements
