@@ -1,0 +1,570 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Vertex AI 整合與後付款設定指南 | Agent OS</title>
+  <!-- Google Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Noto+Sans+TC:wght@300;400;500;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  
+  <style>
+    :root {
+      --bg-color: #0b0f19;
+      --card-bg: rgba(22, 28, 45, 0.6);
+      --card-border: rgba(255, 255, 255, 0.08);
+      --text-primary: #f3f4f6;
+      --text-secondary: #9ca3af;
+      --accent-blue: #3b82f6;
+      --accent-cyan: #06b6d4;
+      --accent-green: #10b981;
+      --accent-yellow: #f59e0b;
+      --accent-red: #ef4444;
+      --gradient-primary: linear-gradient(135deg, #3b82f6 0%, #06b6d4 100%);
+      --gradient-success: linear-gradient(135deg, #10b981 0%, #059669 100%);
+      --gradient-warning: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      background-color: var(--bg-color);
+      color: var(--text-primary);
+      font-family: 'Inter', 'Noto Sans TC', sans-serif;
+      line-height: 1.6;
+      padding: 2rem 1rem;
+      min-height: 100vh;
+      background-image: 
+        radial-gradient(circle at 10% 20%, rgba(59, 130, 246, 0.1) 0%, transparent 40%),
+        radial-gradient(circle at 90% 80%, rgba(6, 118, 212, 0.1) 0%, transparent 40%);
+    }
+
+    .container {
+      max-width: 900px;
+      margin: 0 auto;
+    }
+
+    /* Header */
+    header {
+      text-align: center;
+      margin-bottom: 3rem;
+      position: relative;
+    }
+
+    .badge {
+      display: inline-block;
+      padding: 0.25rem 0.75rem;
+      border-radius: 9999px;
+      font-size: 0.85rem;
+      font-weight: 600;
+      background: var(--gradient-primary);
+      color: #fff;
+      margin-bottom: 1rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      box-shadow: 0 4px 12px rgba(6, 182, 212, 0.3);
+    }
+
+    h1 {
+      font-size: 2.5rem;
+      font-weight: 700;
+      background: linear-gradient(to right, #fff 30%, #a5f3fc 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      margin-bottom: 0.5rem;
+    }
+
+    .subtitle {
+      color: var(--text-secondary);
+      font-size: 1.1rem;
+      font-weight: 300;
+    }
+
+    /* Card Layout */
+    .grid {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 1.5rem;
+      margin-bottom: 2rem;
+    }
+
+    .card {
+      background-color: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 16px;
+      padding: 2rem;
+      backdrop-filter: blur(12px);
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+      transition: transform 0.3s ease, border-color 0.3s ease;
+    }
+
+    .card:hover {
+      transform: translateY(-2px);
+      border-color: rgba(6, 182, 212, 0.25);
+    }
+
+    .card-title {
+      font-size: 1.25rem;
+      font-weight: 600;
+      margin-bottom: 1.5rem;
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+      padding-bottom: 0.75rem;
+    }
+
+    .card-title svg {
+      width: 24px;
+      height: 24px;
+      fill: none;
+      stroke: var(--accent-cyan);
+      stroke-width: 2;
+    }
+
+    /* Comparison Section */
+    .comparison-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1.5rem;
+      margin-bottom: 1rem;
+    }
+
+    @media (max-width: 768px) {
+      .comparison-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    .comp-box {
+      border-radius: 12px;
+      padding: 1.25rem;
+      border: 1px solid rgba(255, 255, 255, 0.05);
+      position: relative;
+    }
+
+    .comp-box.failed {
+      background: rgba(239, 68, 68, 0.05);
+      border-color: rgba(239, 68, 68, 0.2);
+    }
+
+    .comp-box.success {
+      background: rgba(16, 185, 129, 0.05);
+      border-color: rgba(16, 185, 129, 0.2);
+    }
+
+    .comp-header {
+      font-weight: 600;
+      font-size: 1.1rem;
+      margin-bottom: 0.75rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .comp-header.red { color: var(--accent-red); }
+    .comp-header.green { color: var(--accent-green); }
+
+    .comp-status-badge {
+      font-size: 0.75rem;
+      padding: 0.15rem 0.5rem;
+      border-radius: 4px;
+      font-weight: 600;
+      text-transform: uppercase;
+    }
+
+    .comp-status-badge.red { background: rgba(239, 68, 68, 0.2); color: #f87171; }
+    .comp-status-badge.green { background: rgba(16, 185, 129, 0.2); color: #34d399; }
+
+    /* Step Guide */
+    .step-section {
+      margin-top: 1.5rem;
+    }
+
+    .step-card {
+      background: rgba(255, 255, 255, 0.02);
+      border: 1px solid rgba(255, 255, 255, 0.05);
+      border-radius: 12px;
+      padding: 1.5rem;
+      margin-bottom: 1.5rem;
+    }
+
+    .step-card:last-child {
+      margin-bottom: 0;
+    }
+
+    .step-badge {
+      display: inline-block;
+      padding: 0.2rem 0.6rem;
+      background: rgba(59, 130, 246, 0.2);
+      color: #93c5fd;
+      border: 1px solid rgba(59, 130, 246, 0.3);
+      border-radius: 4px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.8rem;
+      font-weight: 600;
+      margin-bottom: 0.75rem;
+    }
+
+    .step-title {
+      font-size: 1.15rem;
+      font-weight: 600;
+      color: var(--text-primary);
+      margin-bottom: 1rem;
+    }
+
+    .step-ol {
+      padding-left: 1.25rem;
+      margin-bottom: 1rem;
+    }
+
+    .step-ol li {
+      margin-bottom: 0.75rem;
+      color: var(--text-secondary);
+      font-size: 0.95rem;
+    }
+
+    .step-ol li strong {
+      color: var(--text-primary);
+    }
+
+    .step-tip {
+      background: rgba(245, 158, 11, 0.05);
+      border-left: 4px solid var(--accent-yellow);
+      padding: 0.75rem 1rem;
+      border-radius: 0 8px 8px 0;
+      font-size: 0.9rem;
+      color: #fcd34d;
+      margin-top: 1rem;
+    }
+
+    .step-code-label {
+      font-size: 0.8rem;
+      color: var(--text-secondary);
+      margin-top: 1rem;
+      display: block;
+      font-weight: 500;
+    }
+
+    /* Timeline Section */
+    .timeline {
+      position: relative;
+      padding-left: 2rem;
+      border-left: 2px solid rgba(255, 255, 255, 0.05);
+    }
+
+    .timeline-item {
+      position: relative;
+      margin-bottom: 2rem;
+    }
+
+    .timeline-item:last-child {
+      margin-bottom: 0;
+    }
+
+    .timeline-dot {
+      position: absolute;
+      left: -2.5rem;
+      top: 0.25rem;
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      background: var(--accent-blue);
+      border: 3px solid var(--bg-color);
+      box-shadow: 0 0 10px var(--accent-blue);
+    }
+
+    .timeline-dot.done {
+      background: var(--accent-green);
+      box-shadow: 0 0 10px var(--accent-green);
+    }
+
+    .timeline-time {
+      font-size: 0.85rem;
+      color: var(--text-secondary);
+      font-weight: 500;
+    }
+
+    .timeline-title {
+      font-weight: 600;
+      font-size: 1.05rem;
+      color: var(--text-primary);
+      margin: 0.25rem 0 0.5rem 0;
+    }
+
+    .timeline-desc {
+      color: var(--text-secondary);
+      font-size: 0.95rem;
+    }
+
+    /* Code Block */
+    pre {
+      background: rgba(0, 0, 0, 0.4);
+      border: 1px solid rgba(255, 255, 255, 0.05);
+      border-radius: 8px;
+      padding: 1rem;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.85rem;
+      overflow-x: auto;
+      color: #38bdf8;
+      margin-top: 0.5rem;
+    }
+
+    /* Key Files List */
+    .file-list {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 0.75rem;
+    }
+
+    .file-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: rgba(255, 255, 255, 0.02);
+      border: 1px solid rgba(255, 255, 255, 0.05);
+      padding: 0.75rem 1rem;
+      border-radius: 8px;
+    }
+
+    .file-name {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.9rem;
+      color: #38bdf8;
+      text-decoration: none;
+    }
+
+    .file-name:hover {
+      text-decoration: underline;
+    }
+
+    .file-desc {
+      font-size: 0.85rem;
+      color: var(--text-secondary);
+    }
+
+    /* Footer */
+    footer {
+      text-align: center;
+      margin-top: 4rem;
+      color: var(--text-secondary);
+      font-size: 0.85rem;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="container">
+    
+    <header>
+      <div class="badge">Success Integration</div>
+      <h1>GCP Vertex AI 整合與後付款設定報告</h1>
+      <p class="subtitle">Agent OS 順利避開 AI Studio 429 限制，成功連結後付計費與免費抵免額</p>
+    </header>
+
+    <div class="grid">
+      
+      <!-- Section 1: Comparison Status -->
+      <div class="card">
+        <div class="card-title">
+          <svg viewBox="0 0 24 24"><path d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 002 2h2a2 2 0 002-2"/></svg>
+          雙管道運作狀態診斷
+        </div>
+        
+        <div class="comparison-grid">
+          
+          <!-- AI Studio -->
+          <div class="comp-box failed">
+            <div class="comp-header red">
+              <span>Google AI Studio</span>
+              <span class="comp-status-badge red">已繞過 (Blocked)</span>
+            </div>
+            <p style="font-size: 0.9rem; color: var(--text-secondary); margin-bottom: 0.5rem;">
+              <strong>介面端點：</strong><code>generativelanguage.googleapis.com</code>
+            </p>
+            <p style="font-size: 0.9rem; color: var(--text-secondary);">
+              <strong>診斷：</strong>即使用戶專案連結了後付帳單，AI Studio 仍將其標記為額度耗盡的 Prepay 預付專案，頻頻出現 <code>429 Prepayment credits are depleted</code> 錯誤。我們目前決定<strong>繞過此管道</strong>。
+            </p>
+          </div>
+
+          <!-- Vertex AI -->
+          <div class="comp-box success">
+            <div class="comp-header green">
+              <span>Vertex AI (Agent Platform)</span>
+              <span class="comp-status-badge green">已解決 (Active)</span>
+            </div>
+            <p style="font-size: 0.9rem; color: var(--text-secondary); margin-bottom: 0.5rem;">
+              <strong>介面端點：</strong><code>aiplatform.googleapis.com</code>
+            </p>
+            <p style="font-size: 0.9rem; color: var(--text-secondary);">
+              <strong>診斷：</strong>專案 API 已啟用，且在手動將服務帳戶授權為 <code>Agent Platform 使用者</code> 後，[test_vertex_ai.js] 已 <strong>100% 執行成功</strong>！計費直接與 GCP 後付款帳戶接軌。
+            </p>
+          </div>
+
+        </div>
+      </div>
+
+      <!-- Section 1.5: Why Vertex AI? (AI Studio Billing Bug Solution) -->
+      <div class="card" style="border-color: rgba(245, 158, 11, 0.2); background: rgba(245, 158, 11, 0.02);">
+        <div class="card-title" style="color: var(--accent-yellow);">
+          <svg viewBox="0 0 24 24" style="stroke: var(--accent-yellow); fill: none; stroke-width: 2; width: 24px; height: 24px;"><path d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+          為什麼需要 Vertex AI？（完美解決 AI Studio 429 扣款 Bug）
+        </div>
+        <p style="font-size: 0.95rem; color: var(--text-secondary); margin-bottom: 1rem;">
+          <strong>💡 官方論壇熱議問題：</strong><br>
+          Google AI Studio 於近期修改了計費同步邏輯。全球大量開發者（如 <a href="https://discuss.ai.google.dev/t/billing-mismatch-gemini-api-429-on-tier-1-prepay-while-cloud-billing-has-funds-but-ai-studio-shows-0-00/140828" target="_blank" style="color: var(--accent-cyan); text-decoration: underline;">官方論壇此帖</a>）反映：<strong>「即便 GCP 帳單帳戶內有充足的資金或免費抵免額（Credits），呼叫 Gemini API 時仍會被強制阻斷，並回報 <code>429 Your prepayment credits are depleted</code>。」</strong>
+        </p>
+        <p style="font-size: 0.95rem; color: var(--text-secondary); margin-bottom: 1rem;">
+          <strong>⚡ 核心原因：</strong><br>
+          AI Studio 的 Developer API（<code>generativelanguage.googleapis.com</code>）目前有自己獨立的 Prepay（預付款）錢包，<strong>它無法直接讀取、也無法消耗您在 Google Cloud Platform 內擁有的贈送抵免額（Promo/Startup Credits）</strong>。
+        </p>
+        <p style="font-size: 0.95rem; color: var(--text-secondary);">
+          <strong>🛡️ 本專案採用的終極解法：</strong><br>
+          GCP 上的 <strong>Vertex AI (Agent Platform)</strong> 是原生的 Google Cloud 企業級服務。它不經過 AI Studio 的錢包，而是<strong>直接與您的 GCP Cloud Billing 帳單帳戶接軌</strong>。因此，切換至 Vertex AI 呼叫管道後，即可<strong>完美消耗您在 GCP 帳戶內的抵免額度與後付款額度</strong>，徹底解決 429 扣款衝突！
+        </p>
+      </div>
+
+      <!-- Section 2: Detailed Step-by-Step Tutorial -->
+      <div class="card">
+        <div class="card-title">
+          <svg viewBox="0 0 24 24"><path d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"/></svg>
+          Vertex AI 設定難點與一步一步仔細解法教學
+        </div>
+
+        <div class="step-section">
+          
+          <!-- Difficulty 1 -->
+          <div class="step-card">
+            <span class="step-badge">Difficulty 01</span>
+            <div class="step-title">如何下載與配置 GCP 服務帳戶 JSON 金鑰</div>
+            <ol class="step-ol">
+              <li>登入 <strong><a href="https://console.cloud.google.com/" target="_blank" style="color: #60a5fa;">Google Cloud 控制台</a></strong>，確認切換至後付款專案 <strong><code>gemini-api-ai-assistant</code></strong>。</li>
+              <li>點擊左上角主選單 ☰，前往 <strong>「IAM 和管理 (IAM & Admin)」</strong> ➔ 點擊 <strong>「服務帳戶 (Service Accounts)」</strong>。</li>
+              <li>點擊頂部 <strong>「+ 建立服務帳戶」</strong>，填寫名稱（例如 <code>vertex-express</code>）並建立。</li>
+              <li>建立後，在服務帳戶清單中點擊您剛建立的帳戶，切換到 <strong>「金鑰 (Keys)」</strong> 標籤頁。</li>
+              <li>點擊 <strong>「新增金鑰 (Add Key)」</strong> ➔ 選擇 <strong>「建立新金鑰 (Create new key)」</strong> ➔ 選擇 <strong>JSON</strong> 格式下載。</li>
+              <li>將下載的檔案重新命名為 <code>gcp-key.json</code>，並放置在專案目錄下。</li>
+            </ol>
+            <div class="step-tip">
+              <strong>提示：</strong>在 <code>.env</code> 環境變數中，確認設定了金鑰的絕對路徑：
+              <code>GCP_KEY_PATH=c:\Users\etrny\.gemini\antigravity\scratch\model-hub-agent\gcp-key.json</code>。
+            </div>
+          </div>
+
+          <!-- Difficulty 2 -->
+          <div class="step-card">
+            <span class="step-badge">Difficulty 02</span>
+            <div class="step-title">在 GCP IAM 正確授權「Agent Platform 使用者」（即舊版 Vertex AI User）</div>
+            <ol class="step-ol">
+              <li>進入 <strong><a href="https://console.cloud.google.com/iam-admin/iam?project=gemini-api-ai-assistant" target="_blank" style="color: #60a5fa;">GCP IAM 控制台頁面</a></strong>。</li>
+              <li>在清單中找到您的服務帳戶 <code>vertex-express@gemini-api-ai-assistant.iam.gserviceaccount.com</code>。</li>
+              <li>點擊該列右側的 **「編輯 (鉛筆圖示)」**；或若不在列表中，點擊頂部 **「授予存取權」** 並填入該 email。</li>
+              <li>點擊 **「新增其他角色」**，在搜尋框中輸入 <code>Agent Platform</code>。</li>
+              <li>點選 **`Agent Platform 使用者`（即舊版 `Vertex AI User`，英文名稱為 `Agent Platform User`）** 角色。</li>
+              <li>點擊 **「儲存」**。等待約 30 秒至 1 分鐘，權限即會在全球 GCP 節點生效。</li>
+            </ol>
+            <div class="step-tip">
+              <strong>注意：</strong>請不要誤選為 <code>Vertex AI 服務代理</code>（這是 Google 的系統內部代理角色），外部 API 呼叫必須使用 <strong>`Agent Platform 使用者`（舊版 `Vertex AI User`）</strong> 才能擁有模型預測與呼叫權限。
+            </div>
+          </div>
+
+          <!-- Difficulty 3 -->
+          <div class="step-card">
+            <span class="step-badge">Difficulty 03</span>
+            <div class="step-title">在專案 API 庫啟用「Agent Platform API」服務（即舊版 Vertex AI API）</div>
+            <ol class="step-ol">
+              <li>直接點擊此專屬連結進入 API 程式庫：<br>👉 <strong><a href="https://console.cloud.google.com/apis/library/aiplatform.googleapis.com?project=gemini-api-ai-assistant" target="_blank" style="color: #60a5fa;">啟用 Agent Platform API 連結</a></strong></li>
+              <li>在頁面中確認顯示的 API 名稱為 <strong>`Agent Platform API`</strong>（即舊版 <code>Vertex AI API</code>，服務名稱為 <code>aiplatform.googleapis.com</code>）。</li>
+              <li>若按鈕顯示為藍色 <strong>「啟用 (Enable)」</strong>，請點擊它。若顯示「API 已啟用」，代表該專案已具備 Vertex AI 執行環境。</li>
+            </ol>
+            <div class="step-tip">
+              <strong>重要限制：</strong>自動生成的 <code>gen-lang-client-xxxx</code> 開發者專案缺乏完整的 Service Usage API 權限，因此必須對<strong>手動建立</strong>的標準 GCP 專案執行啟用。
+            </div>
+          </div>
+
+          <!-- Difficulty 4 -->
+          <div class="step-card">
+            <span class="step-badge">Difficulty 04</span>
+            <div class="step-title">後端程式碼規格轉換與動態路由前綴分流</div>
+            <ol class="step-ol">
+              <li><strong>端點與參數轉換：</strong>底層的 <code>VertexAIClient</code> 會自動將 payload 與 systemInstruction 封裝為大小寫相容格式，並用 OAuth2 token (Bearer) 代替 API Key 傳入。</li>
+              <li><strong>前綴隔離：</strong>我們在 <code>model_registry.js</code> 中註冊了 Vertex 版本的模型，並统一加上 <code>vertex/</code> 前綴。</li>
+              <li><strong>移除 fallback：</strong>當偵測到前綴時，<code>VertexAIClient</code> 會自動過濾掉 <code>vertex/</code> 並直接向 Vertex API 呼叫 <code>gemini-2.5-flash</code> 或其他選定模型。</li>
+            </ol>
+            <span class="step-code-label">模型註冊表示例：</span>
+            <pre>
+{
+  model_id: "vertex/gemini-2.5-flash",
+  provider: "vertex-ai",
+  context_window: 1000000,
+  limits: { rpm: 60, tpm: 1000000 }
+}</pre>
+          </div>
+
+        </div>
+      </div>
+
+      <!-- Section 3: File Inventory -->
+      <div class="card">
+        <div class="card-title">
+          <svg viewBox="0 0 24 24"><path d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+          本機配置檔案與程式碼
+        </div>
+
+        <div class="file-list">
+          
+          <div class="file-item">
+            <a href="file:///c:/Users/etrny/.gemini/antigravity/scratch/model-hub-agent/infrastructure/clients/vertex_ai_client.js" class="file-name">vertex_ai_client.js</a>
+            <span class="file-desc">Vertex AI REST API 呼叫客戶端實作</span>
+          </div>
+
+          <div class="file-item">
+            <a href="file:///c:/Users/etrny/.gemini/antigravity/scratch/model-hub-agent/registry/model_registry.js" class="file-name">model_registry.js</a>
+            <span class="file-desc">已註冊 vertex/gemini-2.5-flash 分流設定</span>
+          </div>
+
+          <div class="file-item">
+            <a href="file:///c:/Users/etrny/.gemini/antigravity/scratch/model-hub-agent/main.js" class="file-name">main.js</a>
+            <span class="file-desc">Agent OS 總司令入口，已掛載 VertexAIClient</span>
+          </div>
+
+          <div class="file-item">
+            <a href="file:///c:/Users/etrny/.gemini/antigravity/scratch/model-hub-agent/tests/test_vertex_ai.js" class="file-name">test_vertex_ai.js</a>
+            <span class="file-desc">Vertex AI 整合連線測試腳本</span>
+          </div>
+
+        </div>
+      </div>
+
+      <!-- Section 4: References & Knowledge Base -->
+      <div class="card">
+        <div class="card-title">
+          <svg viewBox="0 0 24 24" style="stroke: var(--accent-cyan); fill: none; stroke-width: 2; width: 24px; height: 24px;"><path d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"/></svg>
+          知識庫與參考文獻
+        </div>
+        <p style="font-size: 0.95rem; color: var(--text-secondary); margin-bottom: 1rem;">
+          本專案的計費與技術架構已整理並同步記錄於 Yanting 的 Notion 個人知識庫中，方便團隊隨時查閱與追蹤後續更新：
+        </p>
+        <div class="file-list">
+          <div class="file-item">
+            <a href="https://app.notion.com/p/insightnote/429-Prepayment-credits-are-depleted-38b7152bd49e8091ab4ed80a95af4a7c" target="_blank" class="file-name" style="color: var(--accent-cyan); text-decoration: underline;">Notion | 429 Prepayment credits are depleted 解法紀錄</a>
+            <span class="file-desc">詳細記錄了 Google AI Studio 與 GCP Billing 帳單不同步的根本原因與排錯筆記</span>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <footer>
+      Antigravity Agent OS &copy; 2026. Designed for Yanting's Portfolio Hub.
+    </footer>
+
+  </div>
+
+</body>
+</html>
