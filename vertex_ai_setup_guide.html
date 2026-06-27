@@ -409,6 +409,26 @@
         </div>
       </div>
 
+      <!-- Section 1.5: Why Vertex AI? (AI Studio Billing Bug Solution) -->
+      <div class="card" style="border-color: rgba(245, 158, 11, 0.2); background: rgba(245, 158, 11, 0.02);">
+        <div class="card-title" style="color: var(--accent-yellow);">
+          <svg viewBox="0 0 24 24" style="stroke: var(--accent-yellow); fill: none; stroke-width: 2; width: 24px; height: 24px;"><path d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+          為什麼需要 Vertex AI？（完美解決 AI Studio 429 扣款 Bug）
+        </div>
+        <p style="font-size: 0.95rem; color: var(--text-secondary); margin-bottom: 1rem;">
+          <strong>💡 官方論壇熱議問題：</strong><br>
+          Google AI Studio 於近期修改了計費同步邏輯。全球大量開發者（如 <a href="https://discuss.ai.google.dev/t/billing-mismatch-gemini-api-429-on-tier-1-prepay-while-cloud-billing-has-funds-but-ai-studio-shows-0-00/140828" target="_blank" style="color: var(--accent-cyan); text-decoration: underline;">官方論壇此帖</a>）反映：<strong>「即便 GCP 帳單帳戶內有充足的資金或免費抵免額（Credits），呼叫 Gemini API 時仍會被強制阻斷，並回報 <code>429 Your prepayment credits are depleted</code>。」</strong>
+        </p>
+        <p style="font-size: 0.95rem; color: var(--text-secondary); margin-bottom: 1rem;">
+          <strong>⚡ 核心原因：</strong><br>
+          AI Studio 的 Developer API（<code>generativelanguage.googleapis.com</code>）目前有自己獨立的 Prepay（預付款）錢包，<strong>它無法直接讀取、也無法消耗您在 Google Cloud Platform 內擁有的贈送抵免額（Promo/Startup Credits）</strong>。
+        </p>
+        <p style="font-size: 0.95rem; color: var(--text-secondary);">
+          <strong>🛡️ 本專案採用的終極解法：</strong><br>
+          GCP 上的 <strong>Vertex AI (Agent Platform)</strong> 是原生的 Google Cloud 企業級服務。它不經過 AI Studio 的錢包，而是<strong>直接與您的 GCP Cloud Billing 帳單帳戶接軌</strong>。因此，切換至 Vertex AI 呼叫管道後，即可<strong>完美消耗您在 GCP 帳戶內的抵免額度與後付款額度</strong>，徹底解決 429 扣款衝突！
+        </p>
+      </div>
+
       <!-- Section 2: Detailed Step-by-Step Tutorial -->
       <div class="card">
         <div class="card-title">
