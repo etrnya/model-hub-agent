@@ -45,8 +45,72 @@
     }
 
     .container {
-      max-width: 900px;
+      max-width: 1400px;
       margin: 0 auto;
+      padding: 0 1rem;
+    }
+
+    /* Image Container Styles */
+    .image-container {
+      margin: 1.5rem 0;
+      text-align: center;
+      background: rgba(15, 23, 42, 0.4);
+      border: 1px solid var(--card-border);
+      border-radius: 12px;
+      padding: 1.5rem;
+      transition: border-color 0.3s ease;
+    }
+
+    .image-container:hover {
+      border-color: rgba(6, 182, 212, 0.3);
+    }
+    
+    .image-container img {
+      max-width: 100%;
+      height: auto;
+      max-height: 480px;
+      object-fit: contain;
+      border-radius: 8px;
+      display: block;
+      margin: 0.75rem auto 0 auto;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+      transition: transform 0.2s ease;
+    }
+
+    .image-container img:hover {
+      transform: scale(1.015);
+    }
+
+    .image-title {
+      font-size: 1rem;
+      font-weight: 600;
+      color: var(--accent-cyan);
+      margin-bottom: 0.5rem;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.5rem;
+    }
+    
+    .image-desc {
+      font-size: 0.88rem;
+      color: var(--text-secondary);
+      margin-top: 0.75rem;
+      display: block;
+      line-height: 1.5;
+    }
+
+    .image-gallery {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(450px, 1fr));
+      gap: 1.5rem;
+      margin: 1.5rem 0;
+    }
+
+    @media (max-width: 768px) {
+      .image-gallery {
+        grid-template-columns: 1fr;
+      }
     }
 
     /* Header */
@@ -405,83 +469,6 @@
               <strong>診斷：</strong>專案 API 已啟用，且在手動將服務帳戶授權為 <code>Agent Platform 使用者</code> 後，[test_vertex_ai.js] 已 <strong>100% 執行成功</strong>！計費直接與 GCP 後付款帳戶接軌。
             </p>
           </div>
-
-        </div>
-      </div>
-
-      <!-- Section 1.5: Why Vertex AI? (AI Studio Billing Bug Solution) -->
-      <div class="card" style="border-color: rgba(245, 158, 11, 0.2); background: rgba(245, 158, 11, 0.02);">
-        <div class="card-title" style="color: var(--accent-yellow);">
-          <svg viewBox="0 0 24 24" style="stroke: var(--accent-yellow); fill: none; stroke-width: 2; width: 24px; height: 24px;"><path d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-          為什麼需要 Vertex AI？（完美解決 AI Studio 429 扣款 Bug）
-        </div>
-        <p style="font-size: 0.95rem; color: var(--text-secondary); margin-bottom: 1rem;">
-          <strong>💡 官方論壇熱議問題：</strong><br>
-          Google AI Studio 於近期修改了計費同步邏輯。全球大量開發者（如 <a href="https://discuss.ai.google.dev/t/billing-mismatch-gemini-api-429-on-tier-1-prepay-while-cloud-billing-has-funds-but-ai-studio-shows-0-00/140828" target="_blank" style="color: var(--accent-cyan); text-decoration: underline;">官方論壇此帖</a>）反映：<strong>「即便 GCP 帳單帳戶內有充足的資金或免費抵免額（Credits），呼叫 Gemini API 時仍會被強制阻斷，並回報 <code>429 Your prepayment credits are depleted</code>。」</strong>
-        </p>
-        <div style="display: flex; gap: 1rem; flex-wrap: wrap; margin: 1rem 0;">
-          <div style="flex: 1; min-width: 280px; text-align: center;">
-            <span style="font-size: 0.85rem; color: var(--text-secondary); display: block; margin-bottom: 0.3rem;">⚠️ AI Studio 拋出 429 額度耗盡阻斷錯誤</span>
-            <img src="assets/ai_studio_429.png" alt="AI Studio 429 Error" style="width: 100%; max-height: 180px; object-fit: contain; border-radius: 6px; border: 1px solid var(--border-color);">
-          </div>
-          <div style="flex: 1; min-width: 280px; text-align: center;">
-            <span style="font-size: 0.85rem; color: var(--text-secondary); display: block; margin-bottom: 0.3rem;">⚠️ AI Studio 專案計費判定詳情</span>
-            <img src="assets/ai_studio_429_detail.png" alt="AI Studio 429 Error Detail" style="width: 100%; max-height: 180px; object-fit: contain; border-radius: 6px; border: 1px solid var(--border-color);">
-          </div>
-        </div>
-        <p style="font-size: 0.95rem; color: var(--text-secondary); margin-bottom: 1rem;">
-          <strong>⚡ 核心原因：</strong><br>
-          AI Studio 的 Developer API（<code>generativelanguage.googleapis.com</code>）目前有自己獨立的 Prepay（預付款）錢包，<strong>它無法直接讀取、也無法消耗您在 Google Cloud Platform 內擁有的贈送抵免額（Promo/Startup Credits）</strong>。
-        </p>
-        <div style="margin: 1rem 0; text-align: center;">
-          <span style="font-size: 0.85rem; color: var(--text-secondary); display: block; margin-bottom: 0.3rem;">🎁 GCP 帳單中的免費折抵額（每月 10 美金，共 3 張）已成功連結</span>
-          <img src="assets/gcp_credits.png" alt="GCP Credits" style="max-width: 100%; max-height: 220px; object-fit: contain; border-radius: 6px; border: 1px solid var(--border-color);">
-        </div>
-        <p style="font-size: 0.95rem; color: var(--text-secondary);">
-          <strong>🛡️ 本專案採用的終極解法：</strong><br>
-          GCP 上的 <strong>Vertex AI (Agent Platform)</strong> 是原生的 Google Cloud 企業級服務。它不經過 AI Studio 的錢包，而是<strong>直接與您的 GCP Cloud Billing 帳單帳戶接軌</strong>。因此，切換至 Vertex AI 呼叫管道後，即可<strong>完美消耗您在 GCP 帳戶內的抵免額度與後付款額度</strong>，徹底解決 429 扣款衝突！
-        </p>
-      </div>
-
-      <!-- Section 2: Detailed Step-by-Step Tutorial -->
-      <div class="card">
-        <div class="card-title">
-          <svg viewBox="0 0 24 24"><path d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"/></svg>
-          Vertex AI 設定難點與一步一步仔細解法教學
-        </div>
-
-        <div class="step-section">
-          
-          <!-- Difficulty 1 -->
-          <div class="step-card">
-            <span class="step-badge">Difficulty 01</span>
-            <div class="step-title">如何下載與配置 GCP 服務帳戶 JSON 金鑰</div>
-            <ol class="step-ol">
-              <li>登入 <strong><a href="https://console.cloud.google.com/" target="_blank" style="color: #60a5fa;">Google Cloud 控制台</a></strong>，確認切換至後付款專案 <strong><code>gemini-api-ai-assistant</code></strong>。</li>
-              <li>點擊左上角主選單 ☰，前往 <strong>「IAM 和管理 (IAM & Admin)」</strong> ➔ 點擊 <strong>「服務帳戶 (Service Accounts)」</strong>。</li>
-              <div style="margin: 1rem 0; text-align: center;">
-                <span style="font-size: 0.85rem; color: var(--text-secondary); display: block; margin-bottom: 0.3rem;">ℹ️ 服務帳戶管理介面與清單</span>
-                <img src="assets/gcp_service_accounts.png" alt="GCP Service Accounts" style="max-width: 100%; max-height: 180px; object-fit: contain; border-radius: 6px; border: 1px solid var(--border-color);">
-              </div>
-              <li>點擊頂部 <strong>「+ 建立服務帳戶」</strong>，填寫名稱（例如 <code>vertex-express</code>）並建立。</li>
-              <li>建立後，在服務帳戶清單中點擊您剛建立的帳戶，切換到 <strong>「金鑰 (Keys)」</strong> 標籤頁。</li>
-              <li>點擊 <strong>「新增金鑰 (Add Key)」</strong> ➔ 選擇 <strong>「建立新金鑰 (Create new key)」</strong> ➔ 選擇 <strong>JSON</strong> 格式下載。</li>
-              <div style="display: flex; gap: 1rem; flex-wrap: wrap; margin: 1rem 0;">
-                <div style="flex: 1; min-width: 280px; text-align: center;">
-                  <span style="font-size: 0.85rem; color: var(--text-secondary); display: block; margin-bottom: 0.3rem;">ℹ️ 切換至「金鑰」分頁並點擊新增</span>
-                  <img src="assets/gcp_keys_tab.png" alt="GCP Keys Tab" style="width: 100%; max-height: 140px; object-fit: contain; border-radius: 6px; border: 1px solid var(--border-color);">
-                </div>
-                <div style="flex: 1; min-width: 280px; text-align: center;">
-                  <span style="font-size: 0.85rem; color: var(--text-secondary); display: block; margin-bottom: 0.3rem;">ℹ️ 建立 JSON 格式私鑰金鑰</span>
-                  <img src="assets/gcp_create_key.png" alt="GCP Create Key JSON" style="width: 100%; max-height: 140px; object-fit: contain; border-radius: 6px; border: 1px solid var(--border-color);">
-                </div>
-              </div>
-              <li>將下載的檔案重新命名為 <code>gcp-key.json</code>，並放置在專案目錄下。</li>
-            </ol>
-            <div class="step-tip">
-              <strong>提示：</strong>在 <code>.env</code> 環境變數中，確認設定了金鑰的絕對路徑：
-              <code>GCP_KEY_PATH=c:\Users\etrny\.gemini\antigravity\scratch\model-hub-agent\gcp-key.json</code>。
-            </div>
           </div>
 
           <!-- Difficulty 2 -->
@@ -496,6 +483,13 @@
               <li>點選 **`Agent Platform 使用者`（即舊版 `Vertex AI User`，英文名稱為 `Agent Platform User`）** 角色。</li>
               <li>點擊 **「儲存」**。等待約 30 秒至 1 分鐘，權限即會在全球 GCP 節點生效。</li>
             </ol>
+            
+            <!-- Image 6 -->
+            <div class="image-container">
+              <div class="image-title">🛡️ GCP IAM 服務帳戶權限設定</div>
+              <img src="assets/6_difficulty2_iam.png" alt="GCP IAM Role Settings">
+              <span class="image-desc">在 GCP IAM 授權頁面，搜尋並將 <strong>`Agent Platform 使用者`</strong>（英文為 <code>Agent Platform User</code>）角色授予您的服務帳戶，以啟動預測與模型呼叫能力。</span>
+            </div>
             <div class="step-tip">
               <strong>注意：</strong>請不要誤選為 <code>Vertex AI 服務代理</code>（這是 Google 的系統內部代理角色），外部 API 呼叫必須使用 <strong>`Agent Platform 使用者`（舊版 `Vertex AI User`）</strong> 才能擁有模型預測與呼叫權限。
             </div>
@@ -510,6 +504,13 @@
               <li>在頁面中確認顯示的 API 名稱為 <strong>`Agent Platform API`</strong>（即舊版 <code>Vertex AI API</code>，服務名稱為 <code>aiplatform.googleapis.com</code>）。</li>
               <li>若按鈕顯示為藍色 <strong>「啟用 (Enable)」</strong>，請點擊它。若顯示「API 已啟用」，代表該專案已具備 Vertex AI 執行環境。</li>
             </ol>
+            
+            <!-- Image 7 -->
+            <div class="image-container">
+              <div class="image-title">🛡️ 啟用專案 Agent Platform API 服務</div>
+              <img src="assets/7_difficulty3_api.png" alt="Enable Agent Platform API">
+              <span class="image-desc">在專案 API 程式庫搜尋並啟用 <strong>`Agent Platform API`</strong>（即舊版 <code>Vertex AI API</code>，服務名稱為 <code>aiplatform.googleapis.com</code>）。</span>
+            </div>
             <div class="step-tip">
               <strong>重要限制：</strong>自動生成的 <code>gen-lang-client-xxxx</code> 開發者專案缺乏完整的 Service Usage API 權限，因此必須對<strong>手動建立</strong>的標準 GCP 專案執行啟用。
             </div>
@@ -532,6 +533,43 @@
   context_window: 1000000,
   limits: { rpm: 60, tpm: 1000000 }
 }</pre>
+
+            <!-- Image 8 -->
+            <div class="image-container">
+              <div class="image-title">💻 後端驗證與呼叫測試結果</div>
+              <img src="assets/8_difficulty4_code.png" alt="Backend Code Execution">
+              <span class="image-desc">後端程式配置完成金鑰絕對路徑後，透過執行連線測試驗證，順利利用 GCP Vertex AI 管道成功回傳 Gemini 預測結果。</span>
+            </div>
+          </div>
+
+          <!-- Verification Section (Images 9, 10, 11) -->
+          <div class="step-card" style="border-top: 1px dashed rgba(255, 255, 255, 0.1); padding-top: 2rem; margin-top: 2rem;">
+            <span class="step-badge" style="background: var(--gradient-success);">Verification</span>
+            <div class="step-title" style="color: var(--accent-green);">GCP 帳單與免費抵扣額實測成功驗證</div>
+            <p style="font-size: 0.95rem; color: var(--text-secondary); margin-bottom: 1rem;">
+              切換為 GCP Vertex AI (Agent Platform) 後，我們對比了帳單後台數據，確認所有的 API 呼叫費用皆已被活動贈送抵免額完全抵扣：
+            </p>
+            
+            <!-- Image 9 -->
+            <div class="image-container">
+              <div class="image-title">📈 免費抵扣額使用明細</div>
+              <img src="assets/9_credits_used.png" alt="Credits Used Detail">
+              <span class="image-desc">順利用完第一張 10 美元的抵扣額，抵扣金額與呼叫量顯示均正常扣抵。</span>
+            </div>
+
+            <!-- Image 10 -->
+            <div class="image-container">
+              <div class="image-title">📈 Vertex AI 計費數據分析</div>
+              <img src="assets/10_credits_deducted.png" alt="Credits Deducted Trend">
+              <span class="image-desc">費用明細圖表指出，所有的 API 呼叫費用均呈現抵扣狀態，免費額度成功扣抵。</span>
+            </div>
+
+            <!-- Image 11 -->
+            <div class="image-container">
+              <div class="image-title">📈 月度帳單抵扣實測</div>
+              <img src="assets/11_costs_deducted_ok.png" alt="Billing Deducted Success">
+              <span class="image-desc">這個月所產生的所有 Gemini API 調用費用已成功被活動贈送免費額扣抵（顯示此月用的費用都有抵免掉）。</span>
+            </div>
           </div>
 
         </div>
