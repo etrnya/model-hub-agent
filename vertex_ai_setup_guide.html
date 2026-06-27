@@ -439,17 +439,17 @@
           <!-- Difficulty 2 -->
           <div class="step-card">
             <span class="step-badge">Difficulty 02</span>
-            <div class="step-title">在 GCP IAM 正確授權「Agent Platform 使用者 (Vertex AI User)」</div>
+            <div class="step-title">在 GCP IAM 正確授權「Agent Platform 使用者 (Agent Platform User)」</div>
             <ol class="step-ol">
               <li>進入 <strong><a href="https://console.cloud.google.com/iam-admin/iam?project=gemini-api-ai-assistant" target="_blank" style="color: #60a5fa;">GCP IAM 控制台頁面</a></strong>。</li>
               <li>在清單中找到您的服務帳戶 <code>vertex-express@gemini-api-ai-assistant.iam.gserviceaccount.com</code>。</li>
               <li>點擊該列右側的 **「編輯 (鉛筆圖示)」**；或若不在列表中，點擊頂部 **「授予存取權」** 並填入該 email。</li>
               <li>點擊 **「新增其他角色」**，在搜尋框中輸入 <code>Agent Platform</code>。</li>
-              <li>點選 **`Agent Platform 使用者` (即 `Vertex AI User`)** 角色。</li>
+              <li>點選 **`Agent Platform 使用者` (即 `Agent Platform User`)** 角色。</li>
               <li>點擊 **「儲存」**。等待約 30 秒至 1 分鐘，權限即會在全球 GCP 節點生效。</li>
             </ol>
             <div class="step-tip">
-              <strong>注意：</strong>請不要誤選為 <code>Vertex AI 服務代理</code>（這是 Google 的系統內部代理角色），外部 API 呼叫必須使用 <strong>`Agent Platform 使用者` (Vertex AI User)</strong> 才能擁有模型預測與呼叫權限。
+              <strong>注意：</strong>請不要誤選為 <code>Vertex AI 服務代理</code>（這是 Google 的系統內部代理角色），外部 API 呼叫必須使用 <strong>`Agent Platform 使用者` (Agent Platform User)</strong> 才能擁有模型預測與呼叫權限。
             </div>
           </div>
 
