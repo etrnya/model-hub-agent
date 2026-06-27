@@ -96,6 +96,35 @@ This project supports using a **GCP Service Account JSON Key** to call the Verte
 For a detailed step-by-step tutorial, open the local guide in your browser:
 👉 **[vertex_ai_setup_guide.html](vertex_ai_setup_guide.html)**
 
+## 🪙 Token-Saving Optimization Strategies
+
+Agent OS implements several industrial-grade optimization mechanisms to minimize token usage, bypass API rate limits, and control operational costs.
+
+### 1. Key-Insight Anchoring (Context Compression)
+- **Mechanism**: Dynamic context compression that trims conversation histories, logs, or intermediate steps when total tokens exceed the model capability threshold. Crucially, it anchors and protects high-priority system inputs (`objective` and `constraints`) to prevent model amnesia.
+- **Source File**: [context_compressor.js](file:///c:/Users/etrny/.gemini/antigravity/scratch/model-hub-agent/infrastructure/adapters/context_compressor.js)
+- **Detailed Guide**: [AGENT_OS_JOURNAL_AND_COST_GUIDE.md:L39](file:///c:/Users/etrny/.gemini/antigravity/scratch/model-hub-agent/AGENT_OS_JOURNAL_AND_COST_GUIDE.md#L39)
+
+### 2. SilentFix 2.0 (Local Error Repair)
+- **Mechanism**: Instead of resending entire prompts upon receiving minor output syntax errors (e.g., missing braces, trailing commas, or Markdown codeblock wrapping), the validation engine parses and repairs JSON structures locally. This completely avoids redundant retry API calls (which double token cost).
+- **Source File**: [schema_validator.js](file:///c:/Users/etrny/.gemini/antigravity/scratch/model-hub-agent/infrastructure/adapters/schema_validator.js)
+- **Detailed Guide**: [AGENT_OS_JOURNAL_AND_COST_GUIDE.md:L35](file:///c:/Users/etrny/.gemini/antigravity/scratch/model-hub-agent/AGENT_OS_JOURNAL_AND_COST_GUIDE.md#L35)
+
+### 3. Capability-Aware Dynamic Routing
+- **Mechanism**: Tasks are analyzed and dynamically routed to the most cost-effective tier. Routine or formatting tasks are dispatched to low-cost standard models (e.g., DeepSeek, Llama-3.1-8B), reserving premium high-tier models (e.g., Gemini 1.5 Pro) for final audits or complex reasoning.
+- **Source File**: [router.js](file:///c:/Users/etrny/.gemini/antigravity/scratch/model-hub-agent/services/router.js)
+- **Detailed Guide**: [AGENT_OS_JOURNAL_AND_COST_GUIDE.md:L29](file:///c:/Users/etrny/.gemini/antigravity/scratch/model-hub-agent/AGENT_OS_JOURNAL_AND_COST_GUIDE.md#L29)
+
+### 4. Asymmetric Verification (Dual-Verification Gate)
+- **Mechanism**: Generates responses using standard models and performs strict logical validation using lightweight, high-performance base models. By splitting generation and auditing asynchronously, it avoids running premium models on the entire orchestration flow.
+- **Source File**: [verification_gate.js](file:///c:/Users/etrny/.gemini/antigravity/scratch/model-hub-agent/services/verification_gate.js)
+- **Detailed Guide**: [AGENT_OS_JOURNAL_AND_COST_GUIDE.md:L20](file:///c:/Users/etrny/.gemini/antigravity/scratch/model-hub-agent/AGENT_OS_JOURNAL_AND_COST_GUIDE.md#L20)
+
+### 5. Document-to-Markdown Preprocessing (MarkItDown)
+- **Mechanism**: Converts heavy document formats (PDF, DOCX, XLSX, HTML) into clean, structure-preserved Markdown before LLM ingestion. Eliminates boilerplate HTML/CSS tags (saving up to 90% tokens) and avoids repeating expensive Vision API tokens for images by converting them to text descriptions once.
+- **Source File**: [markitdown_adapter.js](file:///c:/Users/etrny/.gemini/antigravity/scratch/model-hub-agent/infrastructure/adapters/markitdown_adapter.js)
+- **Integration Test**: [test_markitdown_agent.js](file:///c:/Users/etrny/.gemini/antigravity/scratch/model-hub-agent/tests/test_markitdown_agent.js)
+
 ## 🙏 Acknowledgements
 This project was inspired by discussions within the [free-claude-code](https://github.com/Alishahryar1/free-claude-code) community. It has been extensively refactored and evolved into a resilient orchestration kernel specifically optimized for the **Antigravity** framework.
 
