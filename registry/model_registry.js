@@ -22,6 +22,30 @@ class ModelRegistry {
         limits: { rpm: 15, tpm: 1000000 }
       },
       {
+        model_id: "vertex/gemini-2.5-flash",
+        provider: "vertex-ai",
+        context_window: 1000000,
+        supported_modalities: ["text", "vision", "audio", "tool_use"],
+        performance_tier: "base",
+        limits: { rpm: 60, tpm: 1000000 }
+      },
+      {
+        model_id: "vertex/gemini-1.5-flash-002",
+        provider: "vertex-ai",
+        context_window: 1000000,
+        supported_modalities: ["text", "vision", "audio", "tool_use"],
+        performance_tier: "base",
+        limits: { rpm: 60, tpm: 1000000 }
+      },
+      {
+        model_id: "vertex/gemini-1.5-flash",
+        provider: "vertex-ai",
+        context_window: 1000000,
+        supported_modalities: ["text", "vision", "audio", "tool_use"],
+        performance_tier: "base",
+        limits: { rpm: 60, tpm: 1000000 }
+      },
+      {
         model_id: "deepseek-chat",
         provider: "deepseek",
         context_window: 64000,

@@ -3,11 +3,13 @@ const router = require('./services/router');
 const NvidiaNimClient = require('./infrastructure/clients/nvidia_nim_client');
 const GeminiClient = require('./infrastructure/clients/gemini_client');
 const DeepSeekClient = require('./infrastructure/clients/deepseek_client');
+const VertexAIClient = require('./infrastructure/clients/vertex_ai_client');
 
 const clientMap = {
   'nvidia-nim': NvidiaNimClient,
   'google': GeminiClient,
-  'deepseek': DeepSeekClient
+  'deepseek': DeepSeekClient,
+  'vertex-ai': VertexAIClient
 };
 
 /**

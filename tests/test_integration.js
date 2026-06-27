@@ -2,6 +2,7 @@ require('dotenv').config();
 const DeepSeekClient = require('../infrastructure/clients/deepseek_client');
 const GeminiClient = require('../infrastructure/clients/gemini_client');
 const NvidiaNimClient = require('../infrastructure/clients/nvidia_nim_client');
+const VertexAIClient = require('../infrastructure/clients/vertex_ai_client');
 const verificationGate = require('../services/verification_gate');
 
 // 1. Client Factory: Returns the correct client instance based on the router's choice
@@ -17,6 +18,8 @@ function clientFactory(modelCapability) {
       return new DeepSeekClient(config);
     case 'google':
       return new GeminiClient(config);
+    case 'vertex-ai':
+      return new VertexAIClient(config);
     case 'nvidia-nim':
       config.promptMapping = { tool_call_template: "Return valid JSON ONLY." };
       return new NvidiaNimClient(config);
