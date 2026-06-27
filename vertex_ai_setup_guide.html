@@ -419,10 +419,24 @@
           <strong>💡 官方論壇熱議問題：</strong><br>
           Google AI Studio 於近期修改了計費同步邏輯。全球大量開發者（如 <a href="https://discuss.ai.google.dev/t/billing-mismatch-gemini-api-429-on-tier-1-prepay-while-cloud-billing-has-funds-but-ai-studio-shows-0-00/140828" target="_blank" style="color: var(--accent-cyan); text-decoration: underline;">官方論壇此帖</a>）反映：<strong>「即便 GCP 帳單帳戶內有充足的資金或免費抵免額（Credits），呼叫 Gemini API 時仍會被強制阻斷，並回報 <code>429 Your prepayment credits are depleted</code>。」</strong>
         </p>
+        <div style="display: flex; gap: 1rem; flex-wrap: wrap; margin: 1rem 0;">
+          <div style="flex: 1; min-width: 280px; text-align: center;">
+            <span style="font-size: 0.85rem; color: var(--text-secondary); display: block; margin-bottom: 0.3rem;">⚠️ AI Studio 拋出 429 額度耗盡阻斷錯誤</span>
+            <img src="assets/ai_studio_429.png" alt="AI Studio 429 Error" style="width: 100%; max-height: 180px; object-fit: contain; border-radius: 6px; border: 1px solid var(--border-color);">
+          </div>
+          <div style="flex: 1; min-width: 280px; text-align: center;">
+            <span style="font-size: 0.85rem; color: var(--text-secondary); display: block; margin-bottom: 0.3rem;">⚠️ AI Studio 專案計費判定詳情</span>
+            <img src="assets/ai_studio_429_detail.png" alt="AI Studio 429 Error Detail" style="width: 100%; max-height: 180px; object-fit: contain; border-radius: 6px; border: 1px solid var(--border-color);">
+          </div>
+        </div>
         <p style="font-size: 0.95rem; color: var(--text-secondary); margin-bottom: 1rem;">
           <strong>⚡ 核心原因：</strong><br>
           AI Studio 的 Developer API（<code>generativelanguage.googleapis.com</code>）目前有自己獨立的 Prepay（預付款）錢包，<strong>它無法直接讀取、也無法消耗您在 Google Cloud Platform 內擁有的贈送抵免額（Promo/Startup Credits）</strong>。
         </p>
+        <div style="margin: 1rem 0; text-align: center;">
+          <span style="font-size: 0.85rem; color: var(--text-secondary); display: block; margin-bottom: 0.3rem;">🎁 GCP 帳單中的免費折抵額（每月 10 美金，共 3 張）已成功連結</span>
+          <img src="assets/gcp_credits.png" alt="GCP Credits" style="max-width: 100%; max-height: 220px; object-fit: contain; border-radius: 6px; border: 1px solid var(--border-color);">
+        </div>
         <p style="font-size: 0.95rem; color: var(--text-secondary);">
           <strong>🛡️ 本專案採用的終極解法：</strong><br>
           GCP 上的 <strong>Vertex AI (Agent Platform)</strong> 是原生的 Google Cloud 企業級服務。它不經過 AI Studio 的錢包，而是<strong>直接與您的 GCP Cloud Billing 帳單帳戶接軌</strong>。因此，切換至 Vertex AI 呼叫管道後，即可<strong>完美消耗您在 GCP 帳戶內的抵免額度與後付款額度</strong>，徹底解決 429 扣款衝突！
@@ -445,9 +459,23 @@
             <ol class="step-ol">
               <li>登入 <strong><a href="https://console.cloud.google.com/" target="_blank" style="color: #60a5fa;">Google Cloud 控制台</a></strong>，確認切換至後付款專案 <strong><code>gemini-api-ai-assistant</code></strong>。</li>
               <li>點擊左上角主選單 ☰，前往 <strong>「IAM 和管理 (IAM & Admin)」</strong> ➔ 點擊 <strong>「服務帳戶 (Service Accounts)」</strong>。</li>
+              <div style="margin: 1rem 0; text-align: center;">
+                <span style="font-size: 0.85rem; color: var(--text-secondary); display: block; margin-bottom: 0.3rem;">ℹ️ 服務帳戶管理介面與清單</span>
+                <img src="assets/gcp_service_accounts.png" alt="GCP Service Accounts" style="max-width: 100%; max-height: 180px; object-fit: contain; border-radius: 6px; border: 1px solid var(--border-color);">
+              </div>
               <li>點擊頂部 <strong>「+ 建立服務帳戶」</strong>，填寫名稱（例如 <code>vertex-express</code>）並建立。</li>
               <li>建立後，在服務帳戶清單中點擊您剛建立的帳戶，切換到 <strong>「金鑰 (Keys)」</strong> 標籤頁。</li>
               <li>點擊 <strong>「新增金鑰 (Add Key)」</strong> ➔ 選擇 <strong>「建立新金鑰 (Create new key)」</strong> ➔ 選擇 <strong>JSON</strong> 格式下載。</li>
+              <div style="display: flex; gap: 1rem; flex-wrap: wrap; margin: 1rem 0;">
+                <div style="flex: 1; min-width: 280px; text-align: center;">
+                  <span style="font-size: 0.85rem; color: var(--text-secondary); display: block; margin-bottom: 0.3rem;">ℹ️ 切換至「金鑰」分頁並點擊新增</span>
+                  <img src="assets/gcp_keys_tab.png" alt="GCP Keys Tab" style="width: 100%; max-height: 140px; object-fit: contain; border-radius: 6px; border: 1px solid var(--border-color);">
+                </div>
+                <div style="flex: 1; min-width: 280px; text-align: center;">
+                  <span style="font-size: 0.85rem; color: var(--text-secondary); display: block; margin-bottom: 0.3rem;">ℹ️ 建立 JSON 格式私鑰金鑰</span>
+                  <img src="assets/gcp_create_key.png" alt="GCP Create Key JSON" style="width: 100%; max-height: 140px; object-fit: contain; border-radius: 6px; border: 1px solid var(--border-color);">
+                </div>
+              </div>
               <li>將下載的檔案重新命名為 <code>gcp-key.json</code>，並放置在專案目錄下。</li>
             </ol>
             <div class="step-tip">
