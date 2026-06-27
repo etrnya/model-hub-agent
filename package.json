@@ -8,7 +8,8 @@
     "cli": "node cli.js",
     "test": "node tests/test_integration.js",
     "test:guardrail": "node tests/test_guardrail.js",
-    "test:markitdown": "node tests/test_markitdown_agent.js"
+    "test:markitdown": "node tests/test_markitdown_agent.js",
+    "diagnose": "node tests/diagnose_keys.js"
   },
   "keywords": [
     "antigravity",
