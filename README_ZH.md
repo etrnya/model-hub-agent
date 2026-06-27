@@ -67,6 +67,23 @@ graph TD
 4.  **代碼整合模式**：
     引用 `main.js` 中的 `dispatchTask` 函式進行任務分發。
 
+## 🔑 GCP Vertex AI (Agent Platform) 後付款設定 (解決 429 扣款 Bug)
+
+本專案支援使用 **GCP 服務帳戶 JSON 金鑰** 呼叫 Vertex AI (Agent Platform) API，以**完美解決** Google AI Studio 因 Prepay 獨立錢包計費同步問題導致的 `429 Your prepayment credits are depleted` 錯誤，直接消耗您在 Google Cloud 帳戶中的後付資金與免費抵免額 (Credits)。
+
+### 🛠️ 設定步驟：
+1. **取得 JSON 金鑰**：在 GCP 控制台為服務帳戶建立 JSON 格式的金鑰檔並下載（例如命名為 `gcp-key.json`，**本專案已將其加入 `.gitignore` 以防外洩**）。
+2. **授予 IAM 角色**：在 GCP Console 的 IAM 頁面，為該服務帳戶授予 **`Agent Platform 使用者` (Agent Platform User)** 角色（即舊版 `Vertex AI User`）。
+3. **啟用 API**：在專案中啟用 **`Agent Platform API`** (即舊版 `Vertex AI API`，服務名稱 `aiplatform.googleapis.com`)。
+4. **配置環境變數**：在 `.env` 中設定 `GCP_KEY_PATH` 指向金鑰檔案的絕對路徑：
+   ```env
+   GCP_KEY_PATH=c:\path\to\your\gcp-key.json
+   ```
+5. **在註冊表中使用**：使用模型 ID `vertex/gemini-2.5-flash`，系統會自動使用該 JSON 金鑰進行 OAuth2 JWT 簽章並完成 API 呼叫。
+
+詳細的一步一步排錯與教學，請直接雙擊開啟本機的說明網頁：
+👉 **[vertex_ai_setup_guide.html](vertex_ai_setup_guide.html)**
+
 ## 📂 目錄結構
 - `/infrastructure`: 包含各 API 客戶端與校驗器。
 - `/services`: 核心調度邏輯與驗證閘門。

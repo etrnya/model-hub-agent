@@ -79,6 +79,23 @@ node tests/test_compression.js
 node tests/test_vertex_ai.js
 ```
 
+## 🔑 GCP Vertex AI (Agent Platform) Postpaid Configuration
+
+This project supports using a **GCP Service Account JSON Key** to call the Vertex AI (Agent Platform) API. This is the **ultimate solution** to bypass the Google AI Studio `429 Your prepayment credits are depleted` billing sync bug, allowing the kernel to directly consume your Google Cloud postpaid billing funds and promotional credits.
+
+### 🛠️ Setup Steps:
+1. **Get JSON Key**: Create a JSON key for your GCP Service Account in the GCP Console and download it (e.g., save as `gcp-key.json`). **Note: This key file is ignored in `.gitignore` to prevent credential leaks.**
+2. **Grant IAM Role**: In the GCP Console IAM page, grant the **`Agent Platform User`** role (formerly `Vertex AI User`) to this Service Account.
+3. **Enable API**: Enable the **`Agent Platform API`** (formerly `Vertex AI API`, service name: `aiplatform.googleapis.com`) in your project's API Library.
+4. **Configure Environment**: Set the `GCP_KEY_PATH` variable in your `.env` file pointing to the absolute path of your key:
+   ```env
+   GCP_KEY_PATH=c:\path\to\your\gcp-key.json
+   ```
+5. **Use in Code**: Query models using the ID prefix `vertex/gemini-2.5-flash` or similar. The client will automatically sign OAuth2 JWTs and route requests to Vertex AI.
+
+For a detailed step-by-step tutorial, open the local guide in your browser:
+👉 **[vertex_ai_setup_guide.html](vertex_ai_setup_guide.html)**
+
 ## 🙏 Acknowledgements
 This project was inspired by discussions within the [free-claude-code](https://github.com/Alishahryar1/free-claude-code) community. It has been extensively refactored and evolved into a resilient orchestration kernel specifically optimized for the **Antigravity** framework.
 
