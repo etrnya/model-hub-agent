@@ -1,0 +1,585 @@
+﻿<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Vertex AI ?游???隞狡閮剖??? | Agent OS</title>
+  <!-- Google Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Noto+Sans+TC:wght@300;400;500;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  
+  <style>
+    :root {
+      --bg-color: #0b0f19;
+      --card-bg: rgba(22, 28, 45, 0.6);
+      --card-border: rgba(255, 255, 255, 0.08);
+      --text-primary: #f3f4f6;
+      --text-secondary: #9ca3af;
+      --accent-blue: #3b82f6;
+      --accent-cyan: #06b6d4;
+      --accent-green: #10b981;
+      --accent-yellow: #f59e0b;
+      --accent-red: #ef4444;
+      --gradient-primary: linear-gradient(135deg, #3b82f6 0%, #06b6d4 100%);
+      --gradient-success: linear-gradient(135deg, #10b981 0%, #059669 100%);
+      --gradient-warning: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      background-color: var(--bg-color);
+      color: var(--text-primary);
+      font-family: 'Inter', 'Noto Sans TC', sans-serif;
+      line-height: 1.6;
+      padding: 2rem 1rem;
+      min-height: 100vh;
+      background-image: 
+        radial-gradient(circle at 10% 20%, rgba(59, 130, 246, 0.1) 0%, transparent 40%),
+        radial-gradient(circle at 90% 80%, rgba(6, 118, 212, 0.1) 0%, transparent 40%);
+    }
+
+    .container {
+      max-width: 900px;
+      margin: 0 auto;
+    }
+
+    /* Header */
+    header {
+      text-align: center;
+      margin-bottom: 3rem;
+      position: relative;
+    }
+
+    .badge {
+      display: inline-block;
+      padding: 0.25rem 0.75rem;
+      border-radius: 9999px;
+      font-size: 0.85rem;
+      font-weight: 600;
+      background: var(--gradient-primary);
+      color: #fff;
+      margin-bottom: 1rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      box-shadow: 0 4px 12px rgba(6, 182, 212, 0.3);
+    }
+
+    h1 {
+      font-size: 2.5rem;
+      font-weight: 700;
+      background: linear-gradient(to right, #fff 30%, #a5f3fc 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      margin-bottom: 0.5rem;
+    }
+
+    .subtitle {
+      color: var(--text-secondary);
+      font-size: 1.1rem;
+      font-weight: 300;
+    }
+
+    /* Card Layout */
+    .grid {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 1.5rem;
+      margin-bottom: 2rem;
+    }
+
+    .card {
+      background-color: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 16px;
+      padding: 2rem;
+      backdrop-filter: blur(12px);
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+      transition: transform 0.3s ease, border-color 0.3s ease;
+    }
+
+    .card:hover {
+      transform: translateY(-2px);
+      border-color: rgba(6, 182, 212, 0.25);
+    }
+
+    .card-title {
+      font-size: 1.25rem;
+      font-weight: 600;
+      margin-bottom: 1.5rem;
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+      padding-bottom: 0.75rem;
+    }
+
+    .card-title svg {
+      width: 24px;
+      height: 24px;
+      fill: none;
+      stroke: var(--accent-cyan);
+      stroke-width: 2;
+    }
+
+    /* Comparison Section */
+    .comparison-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1.5rem;
+      margin-bottom: 1rem;
+    }
+
+    @media (max-width: 768px) {
+      .comparison-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    .comp-box {
+      border-radius: 12px;
+      padding: 1.25rem;
+      border: 1px solid rgba(255, 255, 255, 0.05);
+      position: relative;
+    }
+
+    .comp-box.failed {
+      background: rgba(239, 68, 68, 0.05);
+      border-color: rgba(239, 68, 68, 0.2);
+    }
+
+    .comp-box.success {
+      background: rgba(16, 185, 129, 0.05);
+      border-color: rgba(16, 185, 129, 0.2);
+    }
+
+    .comp-header {
+      font-weight: 600;
+      font-size: 1.1rem;
+      margin-bottom: 0.75rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .comp-header.red { color: var(--accent-red); }
+    .comp-header.green { color: var(--accent-green); }
+
+    .comp-status-badge {
+      font-size: 0.75rem;
+      padding: 0.15rem 0.5rem;
+      border-radius: 4px;
+      font-weight: 600;
+      text-transform: uppercase;
+    }
+
+    .comp-status-badge.red { background: rgba(239, 68, 68, 0.2); color: #f87171; }
+    .comp-status-badge.green { background: rgba(16, 185, 129, 0.2); color: #34d399; }
+
+    /* Step Guide */
+    .step-section {
+      margin-top: 1.5rem;
+    }
+
+    .step-card {
+      background: rgba(255, 255, 255, 0.02);
+      border: 1px solid rgba(255, 255, 255, 0.05);
+      border-radius: 12px;
+      padding: 1.5rem;
+      margin-bottom: 1.5rem;
+    }
+
+    .step-card:last-child {
+      margin-bottom: 0;
+    }
+
+    .step-badge {
+      display: inline-block;
+      padding: 0.2rem 0.6rem;
+      background: rgba(59, 130, 246, 0.2);
+      color: #93c5fd;
+      border: 1px solid rgba(59, 130, 246, 0.3);
+      border-radius: 4px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.8rem;
+      font-weight: 600;
+      margin-bottom: 0.75rem;
+    }
+
+    .step-title {
+      font-size: 1.15rem;
+      font-weight: 600;
+      color: var(--text-primary);
+      margin-bottom: 1rem;
+    }
+
+    .step-ol {
+      padding-left: 1.25rem;
+      margin-bottom: 1rem;
+    }
+
+    .step-ol li {
+      margin-bottom: 0.75rem;
+      color: var(--text-secondary);
+      font-size: 0.95rem;
+    }
+
+    .step-ol li strong {
+      color: var(--text-primary);
+    }
+
+    .step-tip {
+      background: rgba(245, 158, 11, 0.05);
+      border-left: 4px solid var(--accent-yellow);
+      padding: 0.75rem 1rem;
+      border-radius: 0 8px 8px 0;
+      font-size: 0.9rem;
+      color: #fcd34d;
+      margin-top: 1rem;
+    }
+
+    .step-code-label {
+      font-size: 0.8rem;
+      color: var(--text-secondary);
+      margin-top: 1rem;
+      display: block;
+      font-weight: 500;
+    }
+
+    /* Timeline Section */
+    .timeline {
+      position: relative;
+      padding-left: 2rem;
+      border-left: 2px solid rgba(255, 255, 255, 0.05);
+    }
+
+    .timeline-item {
+      position: relative;
+      margin-bottom: 2rem;
+    }
+
+    .timeline-item:last-child {
+      margin-bottom: 0;
+    }
+
+    .timeline-dot {
+      position: absolute;
+      left: -2.5rem;
+      top: 0.25rem;
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      background: var(--accent-blue);
+      border: 3px solid var(--bg-color);
+      box-shadow: 0 0 10px var(--accent-blue);
+    }
+
+    .timeline-dot.done {
+      background: var(--accent-green);
+      box-shadow: 0 0 10px var(--accent-green);
+    }
+
+    .timeline-time {
+      font-size: 0.85rem;
+      color: var(--text-secondary);
+      font-weight: 500;
+    }
+
+    .timeline-title {
+      font-weight: 600;
+      font-size: 1.05rem;
+      color: var(--text-primary);
+      margin: 0.25rem 0 0.5rem 0;
+    }
+
+    .timeline-desc {
+      color: var(--text-secondary);
+      font-size: 0.95rem;
+    }
+
+    /* Code Block */
+    pre {
+      background: rgba(0, 0, 0, 0.4);
+      border: 1px solid rgba(255, 255, 255, 0.05);
+      border-radius: 8px;
+      padding: 1rem;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.85rem;
+      overflow-x: auto;
+      color: #38bdf8;
+      margin-top: 0.5rem;
+    }
+
+    /* Key Files List */
+    .file-list {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 0.75rem;
+    }
+
+    .file-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: rgba(255, 255, 255, 0.02);
+      border: 1px solid rgba(255, 255, 255, 0.05);
+      padding: 0.75rem 1rem;
+      border-radius: 8px;
+    }
+
+    .file-name {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.9rem;
+      color: #38bdf8;
+      text-decoration: none;
+    }
+
+    .file-name:hover {
+      text-decoration: underline;
+    }
+
+    .file-desc {
+      font-size: 0.85rem;
+      color: var(--text-secondary);
+    }
+
+    /* Footer */
+    footer {
+      text-align: center;
+      margin-top: 4rem;
+      color: var(--text-secondary);
+      font-size: 0.85rem;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="container">
+    
+    <header>
+      <div class="badge">Success Integration</div>
+      <h1>GCP Vertex AI ?游???隞狡閮剖??勗?</h1>
+      <p class="subtitle">Agent OS ??輸? AI Studio 429 ?嚗????敺?閮祥??鞎餅??</p>
+    </header>
+
+    <div class="grid">
+      
+      <!-- Section 1: Comparison Status -->
+      <div class="card">
+        <div class="card-title">
+          <svg viewBox="0 0 24 24"><path d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 002 2h2a2 2 0 002-2"/></svg>
+          ?恣??雿??那??        </div>
+        
+        <div class="comparison-grid">
+          
+          <!-- AI Studio -->
+          <div class="comp-box failed">
+            <div class="comp-header red">
+              <span>Google AI Studio</span>
+              <span class="comp-status-badge red">撌脩???(Blocked)</span>
+            </div>
+            <p style="font-size: 0.9rem; color: var(--text-secondary); margin-bottom: 0.5rem;">
+              <strong>隞蝡舫?嚗?/strong><code>generativelanguage.googleapis.com</code>
+            </p>
+            <p style="font-size: 0.9rem; color: var(--text-secondary);">
+              <strong>閮箸嚗?/strong>?喃蝙?冽撠????鈭?隞董?殷?AI Studio 隞??嗆?閮憿漲???Prepay ??撠?嚗?餃??<code>429 Prepayment credits are depleted</code> ?航炊????捱摰?strong>蝜?甇斤恣??/strong>??            </p>
+          </div>
+
+          <!-- Vertex AI -->
+          <div class="comp-box success">
+            <div class="comp-header green">
+              <span>Vertex AI (Agent Platform)</span>
+              <span class="comp-status-badge green">撌脰圾瘙?(Active)</span>
+            </div>
+            <p style="font-size: 0.9rem; color: var(--text-secondary); margin-bottom: 0.5rem;">
+              <strong>隞蝡舫?嚗?/strong><code>aiplatform.googleapis.com</code>
+            </p>
+            <p style="font-size: 0.9rem; color: var(--text-secondary);">
+              <strong>閮箸嚗?/strong>撠? API 撌脣??剁?銝??撠??董?嗆?甈 <code>Agent Platform 雿輻??/code> 敺?[test_vertex_ai.js] 撌?<strong>100% ?瑁???</strong>嚗?鞎餌?亥? GCP 敺?甈曉董?嗆頠?            </p>
+          </div>
+
+        </div>
+      </div>
+
+      <!-- Section 1.5: Why Vertex AI? (AI Studio Billing Bug Solution) -->
+      <div class="card" style="border-color: rgba(245, 158, 11, 0.2); background: rgba(245, 158, 11, 0.02);">
+        <div class="card-title" style="color: var(--accent-yellow);">
+          <svg viewBox="0 0 24 24" style="stroke: var(--accent-yellow); fill: none; stroke-width: 2; width: 24px; height: 24px;"><path d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+          ?箔?暻潮?閬?Vertex AI嚗?摰?閫?捱 AI Studio 429 ??狡 Bug嚗?        </div>
+        <p style="font-size: 0.95rem; color: var(--text-secondary); margin-bottom: 1rem;">
+          <strong>? 摰隢??梯降??嚗?/strong><br>
+          Google AI Studio ?潸??耨?嫣?閮祥?郊?摩??之???潸?憒?<a href="https://discuss.ai.google.dev/t/billing-mismatch-gemini-api-429-on-tier-1-prepay-while-cloud-billing-has-funds-but-ai-studio-shows-0-00/140828" target="_blank" style="color: var(--accent-cyan); text-decoration: underline;">摰隢?甇文?</a>嚗???<strong>?靘?GCP 撣喳撣單?扳??雲?????祥?萄?憿?Credits嚗??澆 Gemini API ???◤撘瑕?餅嚗蒂? <code>429 Your prepayment credits are depleted</code>??/strong>
+        </p>
+        <div style="display: flex; gap: 1rem; flex-wrap: wrap; margin: 1rem 0;">
+          <div style="flex: 1; min-width: 280px; text-align: center;">
+            <span style="font-size: 0.85rem; color: var(--text-secondary); display: block; margin-bottom: 0.3rem;">?? AI Studio ? 429 憿漲??餅?航炊</span>
+            <img src="assets/ai_studio_429.png" alt="AI Studio 429 Error" style="width: 100%; max-height: 180px; object-fit: contain; border-radius: 6px; border: 1px solid var(--border-color);">
+          </div>
+          <div style="flex: 1; min-width: 280px; text-align: center;">
+            <span style="font-size: 0.85rem; color: var(--text-secondary); display: block; margin-bottom: 0.3rem;">?? AI Studio 撠?閮祥?文?閰單?</span>
+            <img src="assets/ai_studio_429_detail.png" alt="AI Studio 429 Error Detail" style="width: 100%; max-height: 180px; object-fit: contain; border-radius: 6px; border: 1px solid var(--border-color);">
+          </div>
+        </div>
+        <p style="font-size: 0.95rem; color: var(--text-secondary); margin-bottom: 1rem;">
+          <strong>???詨???嚗?/strong><br>
+          AI Studio ??Developer API嚗?code>generativelanguage.googleapis.com</code>嚗???芸楛?函???Prepay嚗?隞狡嚗??<strong>摰瘜?亥????⊥?瘨??Google Cloud Platform ?扳???韐??嚗romo/Startup Credits嚗?/strong>??        </p>
+        <div style="margin: 1rem 0; text-align: center;">
+          <span style="font-size: 0.85rem; color: var(--text-secondary); display: block; margin-bottom: 0.3rem;">?? GCP 撣喳銝剔??祥?憿?瘥? 10 蝢?嚗 3 撘蛛?撌脫????</span>
+          <img src="assets/gcp_credits.png" alt="GCP Credits" style="max-width: 100%; max-height: 220px; object-fit: contain; border-radius: 6px; border: 1px solid var(--border-color);">
+        </div>
+        <p style="font-size: 0.95rem; color: var(--text-secondary);">
+          <strong>?儭??砍?獢?函?蝯扔閫??嚗?/strong><br>
+          GCP 銝? <strong>Vertex AI (Agent Platform)</strong> ?臬??? Google Cloud 隡平蝝???銝???AI Studio ????<strong>?湔???GCP Cloud Billing 撣喳撣單?亥?</strong>??甇歹?????Vertex AI ?澆蝞⊿?敺??喳<strong>摰?瘨??GCP 撣單?抒??萄?憿漲??隞狡憿漲</strong>嚗器摨圾瘙?429 ??狡銵?嚗?        </p>
+      </div>
+
+      <!-- Section 2: Detailed Step-by-Step Tutorial -->
+      <div class="card">
+        <div class="card-title">
+          <svg viewBox="0 0 24 24"><path d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"/></svg>
+          Vertex AI 閮剖??????甇乩?甇乩?蝝啗圾瘜?摮?        </div>
+
+        <div class="step-section">
+          
+          <!-- Difficulty 1 -->
+          <div class="step-card">
+            <span class="step-badge">Difficulty 01</span>
+            <div class="step-title">憒?銝???蝵?GCP ??撣單 JSON ?</div>
+            <ol class="step-ol">
+              <li>?餃 <strong><a href="https://console.cloud.google.com/" target="_blank" style="color: #60a5fa;">Google Cloud ?批??/a></strong>嚗Ⅱ隤??敺?甈曉?獢?<strong><code>gemini-api-ai-assistant</code></strong>??/li>
+              <li>暺?撌虫?閫蜓?詨 ?堆??? <strong>?AM ?恣??(IAM & Admin)??/strong> ??暺? <strong>???董??(Service Accounts)??/strong>??/li>
+              <div style="margin: 1rem 0; text-align: center;">
+                <span style="font-size: 0.85rem; color: var(--text-secondary); display: block; margin-bottom: 0.3rem;">?對? ??撣單蝞∠?隞????/span>
+                <img src="assets/gcp_service_accounts.png" alt="GCP Service Accounts" style="max-width: 100%; max-height: 180px; object-fit: contain; border-radius: 6px; border: 1px solid var(--border-color);">
+              </div>
+              <li>暺?? <strong>?? 撱箇???撣單??/strong>嚗‵撖怠?蝔梧?靘? <code>vertex-express</code>嚗蒂撱箇???/li>
+              <li>撱箇?敺??冽??董?嗆??桐葉暺??典?撱箇??董?塚?????<strong>????(Keys)??/strong> 璅惜??/li>
+              <li>暺? <strong>?憓???(Add Key)??/strong> ???豢? <strong>?遣蝡? (Create new key)??/strong> ???豢? <strong>JSON</strong> ?澆?銝???/li>
+              <div style="display: flex; gap: 1rem; flex-wrap: wrap; margin: 1rem 0;">
+                <div style="flex: 1; min-width: 280px; text-align: center;">
+                  <span style="font-size: 0.85rem; color: var(--text-secondary); display: block; margin-bottom: 0.3rem;">?對? ???喋??啜??蒂暺??啣?</span>
+                  <img src="assets/gcp_keys_tab.png" alt="GCP Keys Tab" style="width: 100%; max-height: 140px; object-fit: contain; border-radius: 6px; border: 1px solid var(--border-color);">
+                </div>
+                <div style="flex: 1; min-width: 280px; text-align: center;">
+                  <span style="font-size: 0.85rem; color: var(--text-secondary); display: block; margin-bottom: 0.3rem;">?對? 撱箇? JSON ?澆?蝘?</span>
+                  <img src="assets/gcp_create_key.png" alt="GCP Create Key JSON" style="width: 100%; max-height: 140px; object-fit: contain; border-radius: 6px; border: 1px solid var(--border-color);">
+                </div>
+              </div>
+              <li>撠?頛?瑼???賢???<code>gcp-key.json</code>嚗蒂?曄蔭?典?獢????/li>
+            </ol>
+            <div class="step-tip">
+              <strong>?內嚗?/strong>??<code>.env</code> ?啣?霈銝哨?蝣箄?閮剖?鈭??啁?蝯?頝臬?嚗?              <code>GCP_KEY_PATH=c:\Users\etrny\.gemini\antigravity\scratch\model-hub-agent\gcp-key.json</code>??            </div>
+          </div>
+
+          <!-- Difficulty 2 -->
+          <div class="step-card">
+            <span class="step-badge">Difficulty 02</span>
+            <div class="step-title">??GCP IAM 甇?Ⅱ???gent Platform 雿輻???唾???Vertex AI User嚗?/div>
+            <ol class="step-ol">
+              <li>?脣 <strong><a href="https://console.cloud.google.com/iam-admin/iam?project=gemini-api-ai-assistant" target="_blank" style="color: #60a5fa;">GCP IAM ?批?圈???/a></strong>??/li>
+              <li>?冽??桐葉?曉?函???撣單 <code>vertex-express@gemini-api-ai-assistant.iam.gserviceaccount.com</code>??/li>
+              <li>暺?閰脣??喳??**?楊頛?(???內)??*嚗??乩??典?銵其葉嚗?????**??鈭?????* 銝血‵?亥府 email??/li>
+              <li>暺? **?憓隞??脯?*嚗??獢葉頛詨 <code>Agent Platform</code>??/li>
+              <li>暺 **`Agent Platform 雿輻?嚗?? `Vertex AI User`嚗??蝔梁 `Agent Platform User`嚗?* 閫??/li>
+              <li>暺? **?摮?*??敺? 30 蝘 1 ??嚗????函? GCP 蝭暺???/li>
+            </ol>
+            <div class="step-tip">
+              <strong>瘜冽?嚗?/strong>隢?閬炊?貊 <code>Vertex AI ??隞??</code>嚗 Google ?頂蝯勗?其誨???莎?嚗???API ?澆敹?雿輻 <strong>`Agent Platform 雿輻?嚗???`Vertex AI User`嚗?/strong> ???璅∪??葫??急???            </div>
+          </div>
+
+          <!-- Difficulty 3 -->
+          <div class="step-card">
+            <span class="step-badge">Difficulty 03</span>
+            <div class="step-title">?典?獢?API 摨怠??具gent Platform API?????唾???Vertex AI API嚗?/div>
+            <ol class="step-ol">
+              <li>?湔暺?甇文?撅祇???脣 API 蝔?摨恬?<br>?? <strong><a href="https://console.cloud.google.com/apis/library/aiplatform.googleapis.com?project=gemini-api-ai-assistant" target="_blank" style="color: #60a5fa;">? Agent Platform API ???</a></strong></li>
+              <li>?券??Ｖ葉蝣箄?憿舐內??API ?迂??<strong>`Agent Platform API`</strong>嚗?? <code>Vertex AI API</code>嚗???蝔梁 <code>aiplatform.googleapis.com</code>嚗?/li>
+              <li>?交??＊蝷箇? <strong>????(Enable)??/strong>嚗?暺?摰憿舐內?PI 撌脣??具?隞?”閰脣?獢歇?瑕? Vertex AI ?瑁??啣???/li>
+            </ol>
+            <div class="step-tip">
+              <strong>???嚗?/strong>?芸?????<code>gen-lang-client-xxxx</code> ???獢撩銋??渡? Service Usage API 甈?嚗?甇文???<strong>??撱箇?</strong>??皞?GCP 撠??瑁????            </div>
+          </div>
+
+          <!-- Difficulty 4 -->
+          <div class="step-card">
+            <span class="step-badge">Difficulty 04</span>
+            <div class="step-title">敺垢蝔?蝣潸??潸?????頝舐?韌??</div>
+            <ol class="step-ol">
+              <li><strong>蝡舫????貉???</strong>摨惜??<code>VertexAIClient</code> ??? payload ??systemInstruction 撠??箏之撠神?詨捆?澆?嚗蒂??OAuth2 token (Bearer) 隞? API Key ?喳??/li>
+              <li><strong>?韌?嚗?/strong>? <code>model_registry.js</code> 銝剛酉?? Vertex ??芋??銝衣?銝?? <code>vertex/</code> ?韌??/li>
+              <li><strong>蝘駁 fallback嚗?/strong>?嗅皜砍?韌??<code>VertexAIClient</code> ???瞈暹? <code>vertex/</code> 銝衣?亙? Vertex API ?澆 <code>gemini-2.5-flash</code> ?隞摰芋??/li>
+            </ol>
+            <span class="step-code-label">璅∪?閮餃?銵函內靘?</span>
+            <pre>
+{
+  model_id: "vertex/gemini-2.5-flash",
+  provider: "vertex-ai",
+  context_window: 1000000,
+  limits: { rpm: 60, tpm: 1000000 }
+}</pre>
+          </div>
+
+        </div>
+      </div>
+
+      <!-- Section 3: File Inventory -->
+      <div class="card">
+        <div class="card-title">
+          <svg viewBox="0 0 24 24"><path d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+          ?祆??蔭瑼???撘Ⅳ
+        </div>
+
+        <div class="file-list">
+          
+          <div class="file-item">
+            <a href="file:///c:/Users/etrny/.gemini/antigravity/scratch/model-hub-agent/infrastructure/clients/vertex_ai_client.js" class="file-name">vertex_ai_client.js</a>
+            <span class="file-desc">Vertex AI REST API ?澆摰Ｘ蝡臬祕雿?/span>
+          </div>
+
+          <div class="file-item">
+            <a href="file:///c:/Users/etrny/.gemini/antigravity/scratch/model-hub-agent/registry/model_registry.js" class="file-name">model_registry.js</a>
+            <span class="file-desc">撌脰酉??vertex/gemini-2.5-flash ??閮剖?</span>
+          </div>
+
+          <div class="file-item">
+            <a href="file:///c:/Users/etrny/.gemini/antigravity/scratch/model-hub-agent/main.js" class="file-name">main.js</a>
+            <span class="file-desc">Agent OS 蝮賢隞文???撌脫?頛?VertexAIClient</span>
+          </div>
+
+          <div class="file-item">
+            <a href="file:///c:/Users/etrny/.gemini/antigravity/scratch/model-hub-agent/tests/test_vertex_ai.js" class="file-name">test_vertex_ai.js</a>
+            <span class="file-desc">Vertex AI ?游????皜祈岫?單</span>
+          </div>
+
+        </div>
+      </div>
+
+      <!-- Section 4: References & Knowledge Base -->
+      <div class="card">
+        <div class="card-title">
+          <svg viewBox="0 0 24 24" style="stroke: var(--accent-cyan); fill: none; stroke-width: 2; width: 24px; height: 24px;"><path d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"/></svg>
+          ?亥?摨怨?????        </div>
+        <p style="font-size: 0.95rem; color: var(--text-secondary); margin-bottom: 1rem;">
+          ?砍?獢?閮祥??銵瑽歇?渡?銝血?甇亥?? Yanting ??Notion ?犖?亥?摨思葉嚗靘踹????梯?餈質馱敺??湔嚗?        </p>
+        <div class="file-list">
+          <div class="file-item">
+            <a href="https://app.notion.com/p/insightnote/429-Prepayment-credits-are-depleted-38b7152bd49e8091ab4ed80a95af4a7c" target="_blank" class="file-name" style="color: var(--accent-cyan); text-decoration: underline;">Notion | 429 Prepayment credits are depleted 閫??蝝??/a>
+            <span class="file-desc">閰喟敦閮?鈭?Google AI Studio ??GCP Billing 撣喳銝?甇亦??寞?????舐?閮?/span>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <footer>
+      Antigravity Agent OS &copy; 2026. Designed for Yanting's Portfolio Hub.
+    </footer>
+
+  </div>
+
+</body>
+</html>

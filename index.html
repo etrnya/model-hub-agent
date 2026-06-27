@@ -47,7 +47,7 @@
     .container {
       max-width: 1400px;
       margin: 0 auto;
-      padding: 0 1rem;
+      padding: 0 1.5rem;
     }
 
     /* Image Container Styles */
@@ -98,19 +98,6 @@
       margin-top: 0.75rem;
       display: block;
       line-height: 1.5;
-    }
-
-    .image-gallery {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(450px, 1fr));
-      gap: 1.5rem;
-      margin: 1.5rem 0;
-    }
-
-    @media (max-width: 768px) {
-      .image-gallery {
-        grid-template-columns: 1fr;
-      }
     }
 
     /* Header */
@@ -469,6 +456,94 @@
               <strong>診斷：</strong>專案 API 已啟用，且在手動將服務帳戶授權為 <code>Agent Platform 使用者</code> 後，[test_vertex_ai.js] 已 <strong>100% 執行成功</strong>！計費直接與 GCP 後付款帳戶接軌。
             </p>
           </div>
+
+        </div>
+      </div>
+
+      <!-- Section 1.5: Why Vertex AI? (AI Studio Billing Bug Solution) -->
+      <div class="card" style="border-color: rgba(245, 158, 11, 0.2); background: rgba(245, 158, 11, 0.02);">
+        <div class="card-title" style="color: var(--accent-yellow);">
+          <svg viewBox="0 0 24 24" style="stroke: var(--accent-yellow); fill: none; stroke-width: 2; width: 24px; height: 24px;"><path d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+          為什麼需要 Vertex AI？（完美解決 AI Studio 429 扣款 Bug）
+        </div>
+        <p style="font-size: 0.95rem; color: var(--text-secondary); margin-bottom: 1rem;">
+          <strong>💡 官方論壇熱議問題：</strong><br>
+          Google AI Studio 於近期修改了計費同步邏輯。全球大量開發者（如 <a href="https://discuss.ai.google.dev/t/billing-mismatch-gemini-api-429-on-tier-1-prepay-while-cloud-billing-has-funds-but-ai-studio-shows-0-00/140828" target="_blank" style="color: var(--accent-cyan); text-decoration: underline;">官方論壇此帖</a>）反映：<strong>「即便 GCP 帳單帳戶內有充足的資金或免費抵免額（Credits），呼叫 Gemini API 時仍會被強制阻斷，並回報 <code>429 Your prepayment credits are depleted</code>。」</strong>
+        </p>
+
+        <!-- Image 1 -->
+        <div class="image-container">
+          <div class="image-title">💎 GCP 帳單中的免費抵扣額度</div>
+          <img src="assets/1_gcp_credits_list.png" alt="GCP Credits List">
+          <span class="image-desc">開發者帳號每個月有 10 美金（約 315 元台幣）的免費扣抵額可以用，目前共拿到 3 張，不確定是不是要用完才有下一張（因為這個月就沒有看到新的了）。</span>
+        </div>
+
+        <p style="font-size: 0.95rem; color: var(--text-secondary); margin-bottom: 1rem;">
+          <strong>⚡ 核心原因：</strong><br>
+          AI Studio 的 Developer API（<code>generativelanguage.googleapis.com</code>）目前有自己獨立的 Prepay（預付款）錢包，<strong>它無法直接讀取、也無法消耗您在 Google Cloud Platform 內擁有的贈送抵免額（Promo/Startup Credits）</strong>。
+        </p>
+
+        <!-- Image 2 -->
+        <div class="image-container">
+          <div class="image-title">⚠️ AI Studio Tier 1 預付狀態判定</div>
+          <img src="assets/2_ai_studio_tier1_prepay.png" alt="AI Studio Tier 1 Prepay">
+          <span class="image-desc">在 Google AI Studio 創建的 API key 明明已經綁定後付的帳戶，也顯示 Tier 1，但還是要預付 Prepay，不能直接使用抵扣額。</span>
+        </div>
+
+        <!-- Image 3 -->
+        <div class="image-container">
+          <div class="image-title">⚠️ 綁定後付仍顯示預付 (Prepay)</div>
+          <img src="assets/3_ai_studio_prepay_status.png" alt="AI Studio Prepay Status">
+          <span class="image-desc">綁定後付的帳戶，系統仍然顯示為預付 Prepay，導致頻頻拋出 429 Prepayment credits are depleted 錯誤。</span>
+        </div>
+
+        <p style="font-size: 0.95rem; color: var(--text-secondary); margin-top: 1rem;">
+          <strong>🛡️ 本專案採用的終極解法：</strong><br>
+          GCP 上的 <strong>Vertex AI (Agent Platform)</strong> 是原生的 Google Cloud 企業級服務。它不經過 AI Studio 的錢包，而是<strong>直接與您的 GCP Cloud Billing 帳單帳戶接軌</strong>。因此，切換至 Vertex AI 呼叫管道後，即可<strong>完美消耗您在 GCP 帳戶內的抵免額度與後付款額度</strong>，徹底解決 429 扣款衝突！
+        </p>
+      </div>
+
+      <!-- Section 2: Detailed Step-by-Step Tutorial -->
+      <div class="card">
+        <div class="card-title">
+          <svg viewBox="0 0 24 24"><path d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"/></svg>
+          Vertex AI 設定難點與一步一步仔細解法教學
+        </div>
+
+        <div class="step-section">
+          
+          <!-- Difficulty 1 -->
+          <div class="step-card">
+            <span class="step-badge">Difficulty 01</span>
+            <div class="step-title">如何下載與配置 GCP 服務帳戶 JSON 金鑰</div>
+            <ol class="step-ol">
+              <li>登入 <strong><a href="https://console.cloud.google.com/" target="_blank" style="color: #60a5fa;">Google Cloud 控制台</a></strong>，確認切換至後付款專案 <strong><code>gemini-api-ai-assistant</code></strong>。</li>
+              <li>點擊左上角主選單 ☰，前往 <strong>「IAM 和管理 (IAM & Admin)」</strong> ➔ 點擊 <strong>「服務帳戶 (Service Accounts)」</strong>。</li>
+              
+              <!-- Image 4 -->
+              <div class="image-container">
+                <div class="image-title">🔑 服務帳戶管理頁面</div>
+                <img src="assets/4_gcp_credits_unused.png" alt="GCP Service Accounts Page">
+                <span class="image-desc">在控制台的服務帳戶清單中，可以看見自動或手動建立的服務帳戶（例如 <code>vertex-express</code>）。</span>
+              </div>
+
+              <li>點擊頂部 <strong>「+ 建立服務帳戶」</strong>，填寫名稱（例如 <code>vertex-express</code>）並建立。</li>
+              <li>建立後，在服務帳戶清單中點擊您剛建立的帳戶，切換到 <strong>「金鑰 (Keys)」</strong> 標籤頁。</li>
+              <li>點擊 <strong>「新增金鑰 (Add Key)」</strong> ➔ 選擇 <strong>「建立新金鑰 (Create new key)」</strong> ➔ 選擇 <strong>JSON</strong> 格式下載。</li>
+
+              <!-- Image 5 -->
+              <div class="image-container">
+                <div class="image-title">🔑 下載 JSON 憑證金鑰</div>
+                <img src="assets/5_difficulty1_keys.png" alt="Difficulty 1 Keys">
+                <span class="image-desc">切換至服務帳戶的「金鑰 (Keys)」頁面，新增並下載 JSON 格式的私鑰，妥善保存於專案目錄中。</span>
+              </div>
+
+              <li>將下載的檔案重新命名為 <code>gcp-key.json</code>，並放置在專案目錄下。</li>
+            </ol>
+            <div class="step-tip">
+              <strong>提示：</strong>在 <code>.env</code> 環境變數中，確認設定了金鑰的絕對路徑：
+              <code>GCP_KEY_PATH=c:\Users\etrny\.gemini\antigravity\scratch\model-hub-agent\gcp-key.json</code>。
+            </div>
           </div>
 
           <!-- Difficulty 2 -->
@@ -490,6 +565,7 @@
               <img src="assets/6_difficulty2_iam.png" alt="GCP IAM Role Settings">
               <span class="image-desc">在 GCP IAM 授權頁面，搜尋並將 <strong>`Agent Platform 使用者`</strong>（英文為 <code>Agent Platform User</code>）角色授予您的服務帳戶，以啟動預測與模型呼叫能力。</span>
             </div>
+
             <div class="step-tip">
               <strong>注意：</strong>請不要誤選為 <code>Vertex AI 服務代理</code>（這是 Google 的系統內部代理角色），外部 API 呼叫必須使用 <strong>`Agent Platform 使用者`（舊版 `Vertex AI User`）</strong> 才能擁有模型預測與呼叫權限。
             </div>
@@ -511,6 +587,7 @@
               <img src="assets/7_difficulty3_api.png" alt="Enable Agent Platform API">
               <span class="image-desc">在專案 API 程式庫搜尋並啟用 <strong>`Agent Platform API`</strong>（即舊版 <code>Vertex AI API</code>，服務名稱為 <code>aiplatform.googleapis.com</code>）。</span>
             </div>
+
             <div class="step-tip">
               <strong>重要限制：</strong>自動生成的 <code>gen-lang-client-xxxx</code> 開發者專案缺乏完整的 Service Usage API 權限，因此必須對<strong>手動建立</strong>的標準 GCP 專案執行啟用。
             </div>
@@ -571,9 +648,6 @@
               <span class="image-desc">這個月所產生的所有 Gemini API 調用費用已成功被活動贈送免費額扣抵（顯示此月用的費用都有抵免掉）。</span>
             </div>
           </div>
-
-        </div>
-      </div>
 
       <!-- Section 3: File Inventory -->
       <div class="card">
