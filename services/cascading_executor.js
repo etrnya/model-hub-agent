@@ -3,6 +3,7 @@ const heartbeatRegistry = require('../registry/heartbeat_registry');
 const NvidiaNimClient = require('../infrastructure/clients/nvidia_nim_client');
 const GeminiClient = require('../infrastructure/clients/gemini_client');
 const DeepSeekClient = require('../infrastructure/clients/deepseek_client');
+const VertexAIClient = require('../infrastructure/clients/vertex_ai_client');
 
 /**
  * CascadingExecutor
@@ -13,7 +14,8 @@ class CascadingExecutor {
     this.clientMap = {
       'nvidia-nim': NvidiaNimClient,
       'google': GeminiClient,
-      'deepseek': DeepSeekClient
+      'deepseek': DeepSeekClient,
+      'vertex-ai': VertexAIClient
     };
   }
 
@@ -78,7 +80,7 @@ class CascadingExecutor {
         console.error(`⚠️  [CascadingExecutor] Failed with ${capability.model_id}: ${error.message}`);
         
         // Mark as degraded in heartbeat to avoid immediate reuse by other components
-        heartbeatRegistry.recordFailure(capability.provider, error.message);
+        heartbeatRegistry.record(capability.provider, 0, false);
         
         console.log(`🔄 [CascadingExecutor] Cascading to next available model...`);
         // Continue to next candidate
