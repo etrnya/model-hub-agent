@@ -81,6 +81,7 @@ class GeminiClient extends BaseClient {
       }],
       generationConfig: {
         temperature: 0.2,
+        max_output_tokens: 8192,
         response_mime_type: "application/json" // Force JSON output for Gemini
       }
     };

@@ -31,9 +31,14 @@ class SchemaValidator {
     
     // 1. Aggressive Extraction: Try to find the JSON core
     // Priority: Markdown blocks -> First { to Last } -> Original
-    const mdMatch = fixedContent.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
-    if (mdMatch) {
-      fixedContent = mdMatch[1];
+    const startJsonMd = fixedContent.indexOf('```json');
+    const endGenericMd = fixedContent.lastIndexOf('```');
+    const startGenericMd = fixedContent.indexOf('```');
+
+    if (startJsonMd !== -1 && endGenericMd !== -1 && endGenericMd > startJsonMd) {
+      fixedContent = fixedContent.substring(startJsonMd + 7, endGenericMd).trim();
+    } else if (startGenericMd !== -1 && endGenericMd !== -1 && endGenericMd > startGenericMd) {
+      fixedContent = fixedContent.substring(startGenericMd + 3, endGenericMd).trim();
     } else {
       const firstBrace = fixedContent.indexOf('{');
       const lastBrace = fixedContent.lastIndexOf('}');
@@ -42,9 +47,8 @@ class SchemaValidator {
       }
     }
 
-    // 2. Remove non-standard comments (// or /* */)
-    fixedContent = fixedContent.replace(/\/\/.*/g, "");
-    fixedContent = fixedContent.replace(/\/\*[\s\S]*?\*\//g, "");
+    // 2. Remove non-standard comments (// or /* */) safely (preserving strings)
+    fixedContent = fixedContent.replace(/("([^"\\]|\\.)*")|(\/\/[^\n]*|\/\*[\s\S]*?\*\/)/g, (m, g1) => g1 ? g1 : "");
 
     // 3. Fix unescaped newlines and control characters inside strings
     // We only target newlines between quotes
