@@ -66,10 +66,23 @@ graph TD
 
     *For GCP Vertex AI setup details, please refer to [vertex_ai_setup_guide.html](vertex_ai_setup_guide.html) (Local File).*
 
-3.  **Run the Kernel**:
+3.  **Run the Interactive CLI**:
     ```bash
-    node main.js
+    node cli.js
     ```
+
+4.  **Run API Key Diagnostics**:
+    ```bash
+    npm run diagnose
+    ```
+
+5.  **Batch Convert Documents to Markdown**:
+    ```bash
+    npm run batch-convert <input_directory> [output_directory]
+    ```
+
+6.  **Code Integration Mode**:
+    Import the `dispatchTask` function from `main.js` to dispatch tasks programmatically.
 
 ## 🧪 Testing
 Unit tests for all core modules are located in the `tests/` directory.

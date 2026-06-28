@@ -64,7 +64,19 @@ graph TD
     ```
     直接在終端機輸入任務目標與要求，無需修改代碼。
 
-4.  **代碼整合模式**：
+4.  **金鑰健康健檢**：
+    ```bash
+    npm run diagnose
+    ```
+    主動向所有註冊的 API 端點發送極小測試，確認金鑰與計費可用性。
+
+5.  **文件批次轉檔為 Markdown**：
+    ```bash
+    npm run batch-convert <目標資料夾路徑> [輸出資料夾路徑]
+    ```
+    一鍵掃描並遞迴將 HTML、PDF、Word、Excel、PPTX 轉為精簡的 Markdown 文字檔案。
+
+6.  **代碼整合模式**：
     引用 `main.js` 中的 `dispatchTask` 函式進行任務分發。
 
 ## 🔑 GCP Vertex AI (Agent Platform) 後付款設定 (解決 429 扣款 Bug)
