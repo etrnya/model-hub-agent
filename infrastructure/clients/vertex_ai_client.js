@@ -99,12 +99,18 @@ class VertexAIClient extends BaseClient {
     const url = `https://${this.location}-aiplatform.googleapis.com/v1/projects/${this.projectId}/locations/${this.location}/publishers/google/models/${modelId}:generateContent`;
 
     try {
-      const response = await fetch(url, {
-        method: "POST",
-        headers: {
+      const { url: routedUrl, headers: routedHeaders } = this.resolveRequestRoute(
+        url,
+        {
           "Authorization": `Bearer ${token}`,
           "Content-Type": "application/json"
         },
+        payload.integrity_headers || {}
+      );
+
+      const response = await fetch(routedUrl, {
+        method: "POST",
+        headers: routedHeaders,
         body: JSON.stringify(requestBody)
       });
 

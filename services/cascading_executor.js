@@ -42,6 +42,10 @@ class CascadingExecutor {
       }
     }
     
+    // Run Context Integrity Gate (CIG) to evaluate context and prepare headers
+    const cig = require('../infrastructure/adapters/context_integrity_gate');
+    const processedContext = cig.process(context);
+    
     // 1. Get ordered candidates from router
     const candidates = router.getCandidates({
       modalities: ["text"],
@@ -72,13 +76,13 @@ class CascadingExecutor {
         });
 
         // 3. Run execution
-        const result = await client.execute(context, schema);
+        const result = await client.execute(processedContext, schema);
         
         console.log(`✅ [CascadingExecutor] Success with ${capability.model_id}!`);
         
         // Record usage to monitor
         const tokenMonitor = require('../observability/token_monitor');
-        const inputTokens = JSON.stringify(context).length / 4;
+        const inputTokens = JSON.stringify(processedContext).length / 4;
         const outputTokens = JSON.stringify(result).length / 4;
         tokenMonitor.record(capability.provider, inputTokens, inputTokens, outputTokens);
 

@@ -87,9 +87,10 @@ class GeminiClient extends BaseClient {
     };
 
     try {
-      const response = await fetch(url, {
+      const routed = this.resolveRequestRoute(url, headers, payload.integrity_headers || {});
+      const response = await fetch(routed.url, {
         method: "POST",
-        headers: headers,
+        headers: routed.headers,
         body: JSON.stringify(requestBody)
       });
 

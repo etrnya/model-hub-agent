@@ -27,6 +27,36 @@ class BaseClient {
   }
 
   /**
+   * Resolves the request URL and headers, optionally routing through the Headroom Context Shaper.
+   * @param {string} originalUrl 
+   * @param {Object} originalHeaders 
+   * @param {Object} [integrityHeaders={}] 
+   * @returns {{ url: string, headers: Object }}
+   */
+  resolveRequestRoute(originalUrl, originalHeaders = {}, integrityHeaders = {}) {
+    const useProxy = process.env.USE_HEADROOM_PROXY === 'true';
+    const proxyUrl = process.env.HEADROOM_PROXY_URL || 'http://localhost:8787';
+
+    if (!useProxy) {
+      return { url: originalUrl, headers: originalHeaders };
+    }
+
+    const parsed = new URL(originalUrl);
+    const originalBase = parsed.origin;
+    
+    // Redirect endpoint to Headroom Proxy
+    const targetUrl = `${proxyUrl.replace(/\/$/, '')}${parsed.pathname}${parsed.search}`;
+
+    const headers = {
+      ...originalHeaders,
+      ...integrityHeaders, // Automatically inject CIG policies
+      'x-headroom-base-url': originalBase
+    };
+
+    return { url: targetUrl, headers };
+  }
+
+  /**
    * Executes a request to the model with integrated resilience logic.
    * @param {Object} globalState 
    * @param {Object} outputSchema - The expected JSON schema for the response.

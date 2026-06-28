@@ -17,6 +17,13 @@ class ContextCompressor {
     const stateString = JSON.stringify(state);
     const currentTokens = this.tokenEstimator(stateString);
 
+    // Check if Context Integrity Gate (CIG) requested to bypass local compression
+    const cigPolicies = state.integrity_metadata?.policies;
+    if (cigPolicies && cigPolicies.bypass_semantic_compression && cigPolicies.bypass_ast_compression) {
+      console.log(`🛡️  [ContextCompressor] Bypassing compression per CIG integrity policies.`);
+      return state;
+    }
+
     if (currentTokens <= limit * 0.85) {
       return state; // No compression needed (with 15% safety margin)
     }

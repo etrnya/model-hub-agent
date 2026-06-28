@@ -42,13 +42,20 @@ class NvidiaNimClient extends BaseClient {
     ];
 
     try {
-      const response = await fetch("https://integrate.api.nvidia.com/v1/chat/completions", {
-        method: "POST",
-        headers: {
+      const originalUrl = "https://integrate.api.nvidia.com/v1/chat/completions";
+      const { url, headers } = this.resolveRequestRoute(
+        originalUrl,
+        {
           "Authorization": `Bearer ${this.apiKey}`,
           "Content-Type": "application/json",
           "Accept": "application/json"
         },
+        payload.integrity_headers || {}
+      );
+
+      const response = await fetch(url, {
+        method: "POST",
+        headers: headers,
         body: JSON.stringify({
           model: this.modelCapability.model_id,
           messages: messages,
