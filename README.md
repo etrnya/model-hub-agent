@@ -167,5 +167,17 @@ Agent OS has undergone several critical architectural upgrades, each driven by r
    - **Trigger**: Feeding raw HTML, PDFs, Excel sheets, or Word files into the LLM ingested heavy layout formatting, boilerplate code, and redundant Vision tokens.
    - **Solution**: Forked [microsoft/markitdown](https://github.com/microsoft/markitdown) locally as [etrnya/markitdown](https://github.com/etrnya/markitdown), and implemented [markitdown_adapter.js](file:///c:/Users/etrny/.gemini/antigravity/scratch/model-hub-agent/infrastructure/adapters/markitdown_adapter.js) to pre-convert files to structured Markdown, reducing token costs by 50% - 90%.
 
+6. **Phase 6: AST-Based CodeGraph Integration** (2026-06-28)
+   - **Trigger**: Loading the entire codebase context directly into LLM prompts caused massive token inflation and made callers/callees dependency tracking inaccurate.
+   - **Solution**: Developed [CodeGraphAdapter](file:///c:/Users/etrny/.gemini/antigravity/scratch/model-hub-agent/infrastructure/adapters/codegraph_adapter.js) integrating Tree-sitter and SQLite dependency analyzers, enabling surgical caller/callee and symbol definition injection.
+
+7. **Phase 7: Context Integrity Gate (CIG) & Headroom Proxy Orchestration** (2026-06-28)
+   - **Trigger**: Context double-compression degraded LLM reasoning. Dynamic compression ratios and effort levels were needed for different task genres (code, doc, debug, explore).
+   - **Solution**: Developed [ContextIntegrityGate](file:///c:/Users/etrny/.gemini/antigravity/scratch/model-hub-agent/infrastructure/adapters/context_integrity_gate.js) establishing the CRIL (Context Routing Intelligence Layer) intercepting all API requests and routing them through local Docker Headroom Proxy using custom `x-headroom-*` control headers.
+
+8. **Phase 8: Qdrant Vector Memory Integration (100% LLM Bypass)** (2026-06-28)
+   - **Trigger**: Running identical or highly similar code-fixing/debugging tasks repeatedly consumed redundant cloud API costs and caused execution latencies.
+   - **Solution**: Developed [MemoryManager](file:///c:/Users/etrny/.gemini/antigravity/scratch/model-hub-agent/infrastructure/adapters/memory_manager.js) using Vertex AI `text-embedding-004` to vectorize objectives, performing Cosine similarity lookups in Docker Qdrant. Hit rates >= 95% bypass cloud LLM inference entirely, achieving 0 token consumption and sub-second execution speeds.
+
 ## 📄 License
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
