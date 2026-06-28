@@ -17,6 +17,7 @@
 | **金鑰健康診斷** | API Diagnostics | `runDiagnostics` | 主動且低成本地測試各平台 API 密鑰與帳單可用性，並呈現在健康儀表板。 |
 | **代碼圖譜適配器** | CodeGraph Adapter | `CodeGraphAdapter` | 介接本地端 AST 分析圖資料庫，實現外科手術式精準的程式符號與呼叫鏈查詢。 |
 | **上下文完整性閘門** | Context Integrity Gate | `ContextIntegrityGate` | 防止上下文雙重壓縮、追蹤 Provenance 來源並保護代碼寫入時的語意忠實度。 |
+| **向量記憶管理器** | Vector Memory Manager | `MemoryManager` | 介接 Qdrant 向量資料庫與 Vertex AI Embedding 的語意記憶快取層，實現重覆任務 100% LLM 繞過。 |
 
 ## 技術組件 (Technical Components)
 
@@ -28,6 +29,8 @@
 *   **gcp-key.json**: Google Cloud 服務帳戶的 JSON 金鑰憑證檔案，用於 Vertex AI OAuth2 的 Bearer 認證。
 *   **CodeGraph**: 基於 Tree-sitter 與 SQLite 的本地程式符號分析與依賴圖查詢引擎。
 *   **Headroom Context Shaper**: 本地運行的上下文壓縮優化網關，提供 SmartCrusher 與 CCR 可逆式壓縮功能。
+*   **Qdrant**: 本地運行的輕量級向量資料庫，用於 Phase 3 的任務語意向量儲存與相似度檢索。
+*   **text-embedding-004**: Google Vertex AI 企業級文本嵌入模型，將自然語言任務目標轉化為 768 維的高維特徵向量。
 
 ## 評估指標 (OS Metrics)
 

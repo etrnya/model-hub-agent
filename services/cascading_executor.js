@@ -30,6 +30,30 @@ class CascadingExecutor {
   async execute(context, schema, options = {}) {
     const { preferredTier = 'high', maxRetries = 3 } = options;
 
+    // Phase 3: Check Qdrant Vector Memory first to bypass LLM calls entirely
+    const memoryManager = require('../infrastructure/adapters/memory_manager');
+    const cachedResult = await memoryManager.searchMemory(context.objective, 0.95);
+    if (cachedResult) {
+      console.log(`✨ [CascadingExecutor] Bypassed LLM execution by retrieving cached result from Qdrant Memory.`);
+      Object.assign(context, cachedResult);
+      const tokenMonitor = require('../observability/token_monitor');
+      tokenMonitor.record('memory-cache', 0, 0, 0);
+      return {
+        success: true,
+        data: cachedResult,
+        modelUsed: {
+          model_id: 'qdrant-memory-cache',
+          provider: 'memory-cache',
+          tier: 'high',
+          context_window: 1000000,
+          max_output_tokens: 1000000,
+          cost_per_1k_input: 0,
+          cost_per_1k_output: 0
+        },
+        attempts: 1
+      };
+    }
+
     // Inject CodeGraph context if not already present
     if (!context.code_context) {
       console.log(`\n🕸️  [CascadingExecutor] Running CodeGraph Pre-Query Context Injection...`);
@@ -85,6 +109,9 @@ class CascadingExecutor {
         const inputTokens = JSON.stringify(processedContext).length / 4;
         const outputTokens = JSON.stringify(result).length / 4;
         tokenMonitor.record(capability.provider, inputTokens, inputTokens, outputTokens);
+
+        // Phase 3: Save successful task execution to memory
+        await memoryManager.saveMemory(context.objective, result);
 
         return {
           success: true,
