@@ -28,7 +28,8 @@ class ContextCompressor {
       objective: state.objective,
       constraints: state.constraints,
       task_id: state.task_id,
-      version: state.version
+      version: state.version,
+      code_context: state.code_context
     };
 
     // 2. Identify flexible data to be compressed/summarized

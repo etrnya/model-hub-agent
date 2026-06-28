@@ -66,8 +66,13 @@ class BaseClient {
           return result.data;
         }
 
-        console.warn(`[BaseClient] Validation failed on attempt ${attempt}:`, result.errors);
-        lastError = new Error("Validation Failed");
+        if (result.error) {
+          console.warn(`[BaseClient] JSON Parse Error on attempt ${attempt}: ${result.error}`);
+          console.warn(`[BaseClient] Raw Response: ${result.raw}`);
+        } else {
+          console.warn(`[BaseClient] Validation failed on attempt ${attempt}:`, result.errors);
+        }
+        lastError = new Error(result.error || "Validation Failed");
         
       } catch (error) {
         const duration = Date.now() - startTime;

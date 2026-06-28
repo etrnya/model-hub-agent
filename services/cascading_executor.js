@@ -4,6 +4,8 @@ const NvidiaNimClient = require('../infrastructure/clients/nvidia_nim_client');
 const GeminiClient = require('../infrastructure/clients/gemini_client');
 const DeepSeekClient = require('../infrastructure/clients/deepseek_client');
 const VertexAIClient = require('../infrastructure/clients/vertex_ai_client');
+const CodeGraphAdapter = require('../infrastructure/adapters/codegraph_adapter');
+const codegraph = new CodeGraphAdapter();
 
 /**
  * CascadingExecutor
@@ -27,6 +29,18 @@ class CascadingExecutor {
    */
   async execute(context, schema, options = {}) {
     const { preferredTier = 'high', maxRetries = 3 } = options;
+
+    // Inject CodeGraph context if not already present
+    if (!context.code_context) {
+      console.log(`\n🕸️  [CascadingExecutor] Running CodeGraph Pre-Query Context Injection...`);
+      const codeCtx = await codegraph.extractAndBuildRelations(context.objective, context.constraints);
+      if (codeCtx) {
+        context.code_context = codeCtx;
+        console.log(`✅ [CascadingExecutor] Injected ${codeCtx.length} chars of CodeGraph context.`);
+      } else {
+        console.log(`ℹ️  [CascadingExecutor] No CodeGraph context found for this task.`);
+      }
+    }
     
     // 1. Get ordered candidates from router
     const candidates = router.getCandidates({
