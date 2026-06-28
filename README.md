@@ -133,24 +133,24 @@ This project was inspired by discussions within the [free-claude-code](https://g
 
 Agent OS has undergone several critical architectural upgrades, each driven by real-world challenges encountered during development (such as token waste, uncontrolled API costs, and service limits):
 
-1. **Phase 1: Core Adaptation & Resilient Defense**
+1. **Phase 1: Core Adaptation & Resilient Defense** (2026-05-12 to 2026-06-15)
    - **Trigger**: AI agents executing complex JSON tasks often wasted API tokens on retrying due to minor formatting errors (e.g., stray Markdown markers). Long conversation histories also caused model "amnesia" (forgetting the initial objectives).
    - **Solution**: Developed [context_compressor.js](file:///c:/Users/etrny/.gemini/antigravity/scratch/model-hub-agent/infrastructure/adapters/context_compressor.js) (Key-Insight Anchoring to lock objectives/constraints) and [schema_validator.js](file:///c:/Users/etrny/.gemini/antigravity/scratch/model-hub-agent/infrastructure/adapters/schema_validator.js) (SilentFix to locally heal JSON syntaxes without retries).
 
-2. **Phase 2: Intelligent Routing & Multi-Model Audits**
+2. **Phase 2: Intelligent Routing & Multi-Model Audits** (2026-06-15 to 2026-06-26)
    - **Trigger**: Directing all queries to top-tier reasoning models caused high costs, while routing everything to lightweight models led to semantic drift and logical bugs.
    - **Solution**: Built a capability-aware router and [verification_gate.js](file:///c:/Users/etrny/.gemini/antigravity/scratch/model-hub-agent/services/verification_gate.js) (Asymmetric Verification Gate), implementing an asynchronous drafting-reviewing pipeline that balances low cost with high logic accuracy.
 
-3. **Phase 3: Postpaid Vertex AI Integration (AI Studio 429 Bug Fix)**
+3. **Phase 3: Postpaid Vertex AI Integration (AI Studio 429 Bug Fix)** (2026-06-26 to 2026-06-27)
    - **Trigger**: Google AI Studio API Keys frequently threw `429 Your prepayment credits are depleted` errors when querying Gemini 2.5 models, due to a known billing synchronization bug.
    - **Solution**: Upgraded Gemini client authentication to support GCP Service Account JSON keys. Routed core queries to the enterprise **Vertex AI (Agent Platform) API**, directly consuming postpaid billing and promotional credits to bypass Studio's prepay limits.
    - **Guide**: [vertex_ai_setup_guide.html](file:///c:/Users/etrny/.gemini/antigravity/scratch/model-hub-agent/vertex_ai_setup_guide.html).
 
-4. **Phase 4: Restricting Browser Tool Misuse**
+4. **Phase 4: Restricting Browser Tool Misuse** (2026-06-27)
    - **Trigger**: Opening browser windows (`browser_subagent`) to scrape simple page elements led to massive token spikes and ballooning API bills.
    - **Solution**: Enforced a project rule restricting browser tool usage. AI agents must prioritize lightweight HTTP methods (e.g., `read_url_content`) or specific Notion MCP tools to retrieve web data instead.
 
-5. **Phase 5: Document-to-Markdown Preprocessing (MarkItDown Integration)**
+5. **Phase 5: Document-to-Markdown Preprocessing (MarkItDown Integration)** (2026-06-27 to 2026-06-28)
    - **Trigger**: Feeding raw HTML, PDFs, Excel sheets, or Word files into the LLM ingested heavy layout formatting, boilerplate code, and redundant Vision tokens.
    - **Solution**: Forked [microsoft/markitdown](https://github.com/microsoft/markitdown) locally as [etrnya/markitdown](https://github.com/etrnya/markitdown), and implemented [markitdown_adapter.js](file:///c:/Users/etrny/.gemini/antigravity/scratch/model-hub-agent/infrastructure/adapters/markitdown_adapter.js) to pre-convert files to structured Markdown, reducing token costs by 50% - 90%.
 

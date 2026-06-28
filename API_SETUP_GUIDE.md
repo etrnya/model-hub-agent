@@ -62,5 +62,26 @@ Ollama 不是一個雲端 API，而是一個安裝在您自己電腦上的軟體
 7. 在您的 `.env` 檔案中，確保有一行：`OLLAMA_BASE_URL=http://localhost:11434`。
 
 ---
+
+## 5. 🟤 GCP Vertex AI (企業級後付款：徹底解決 AI Studio 429 欠費錯誤)
+為了消耗 GCP 帳戶內的抵扣額與信用額度，且繞過 Google AI Studio 預付款餘額同步 Bug，本系統支持直接使用 GCP 服務帳戶 JSON 金鑰憑證呼叫 Vertex AI (Agent Platform) API。
+
+**金鑰下載與設定步驟：**
+1. 登入 **[Google Cloud 控制台](https://console.cloud.google.com/)**，確認選取您的專案（如 `gemini-api-ai-assistant`）。
+2. 點擊左上角導覽選單 ☰，前往 **「IAM 和管理 (IAM & Admin)」** ➔ 點擊 **「服務帳戶 (Service Accounts)」**。
+3. 點擊頂部 **「+ 建立服務帳戶」**，為其填寫名稱（例如 `vertex-express`）並點擊建立與繼續。
+4. 建立完成後，在列表中點擊該服務帳戶的 Email 進入詳情頁。
+5. 切換至頂部的 **「金鑰 (Keys)」** 標籤頁 ➔ 點擊 **「新增金鑰 (Add Key)」** ➔ 選擇 **「建立新金鑰 (Create new key)」**。
+6. 在彈出視窗中選擇 **JSON** 格式，點擊 **「建立 (Create)」**，系統會自動下載一個 `.json` 憑證檔案至您的電腦中。
+7. 將此 JSON 檔案命名為 **`gcp-key.json`**，妥善保存於專案根目錄或 `.gemini` 安全目錄。
+8. **角色授權**：前往 **[IAM 頁面](https://console.cloud.google.com/iam-admin/iam)**，點擊您新增的服務帳戶旁的編輯按鈕，為其新增並授予 **「Agent Platform 使用者」**（即舊稱 `Vertex AI User`）權限。
+9. **啟用 API**：前往 **[Agent Platform API 頁面](https://console.cloud.google.com/apis/library/aiplatform.googleapis.com)**，點擊 **「啟用 (Enable)」** 服務。
+10. **環境變數設定**：在 `.env` 檔案中，設定您的金鑰絕對路徑：
+    ```env
+    GCP_KEY_PATH=c:\Users\etrny\.gemini\antigravity\scratch\model-hub-agent\gcp-key.json
+    ```
+
+---
 > **💡 小提醒**：
-> 這些 API 金鑰就如同您的信用卡，請妥善保管，**絕對不要將 `.env` 檔案上傳到公開的網路空間或傳送給他人**。
+> 這些 API 金鑰與服務帳戶憑證就如同您的信用卡，請妥善保管，**絕對不要將 `.env` 或 `gcp-key.json` 檔案上傳到公開的 GitHub 倉庫或傳送給他人**。
+

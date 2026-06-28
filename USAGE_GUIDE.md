@@ -79,7 +79,44 @@ dispatchTask(task, schema, "high");
 
 ---
 
-## 6. 如何添加新模型？
+## 6. 文件預處理與 Token 壓縮 (MarkItDown 整合)
+
+當您有 HTML、PDF、Word (DOCX) 或 Excel (XLSX) 等大型文檔需要輸入給 LLM 時，建議使用內建的 [markitdown_adapter.js](file:///c:/Users/etrny/.gemini/antigravity/scratch/model-hub-agent/infrastructure/adapters/markitdown_adapter.js) 進行預處理。
+
+### 操作方式：
+適配器會自動調用本地的 Python `markitdown` 虛擬環境，將原生笨重的檔案轉化為純文字 Markdown：
+```javascript
+const MarkItDownAdapter = require('./infrastructure/adapters/markitdown_adapter');
+
+async function processFile() {
+  const filePath = "c:\\path\\to\\your\\document.pdf";
+  const result = await MarkItDownAdapter.convertToMarkdown(filePath);
+  
+  console.log("轉檔後的 Markdown 內容:", result.markdown);
+  console.log("Token 節省估計:", result.savingsPercent + "%");
+}
+```
+*   **優勢**：
+    -   大幅降低網頁與文件原生格式（XML/CSS/HTML）造成的 Token 浪費（約省下 50% - 90%）。
+    -   圖片與圖表僅在轉換時呼叫一次 Vision 模組進行 OCR，後續多輪對話只讀取純文字，**免除重複傳送圖片導致的 Vision Token 扣款**。
+
+---
+
+## 7. 主動式金鑰健康診斷 (Health Check)
+
+當您懷疑 API 金鑰失效（例如 Google AI Studio 回報 429 或 NVIDIA 報錯）時，本系統提供一鍵健檢功能。
+
+### 使用方式：
+1.  **在終端機手動執行**：
+    ```bash
+    npm run diagnose
+    ```
+2.  **在 Antigravity 聊天介面中**：
+    直接對我說 **「幫我檢查金鑰」** 或 **「金鑰健檢」**，我便會直接在背景執行並將健康狀態儀表板以表格形式回報給您，您無需手動輸入指令！
+
+---
+
+## 8. 如何添加新模型？
 編輯 `registry/model_registry.js`，加入新的 `ModelCapabilitySchema` 即可。系統會自動根據您定義的 `performance_tier` 將其納入調度與備援清單。
 
 ---

@@ -26,6 +26,21 @@
 *   **行為**：若配額即將枯竭，會在 API 調用前攔截並報錯，觸發系統的回退機制。
 *   **價值**：防止多個模型因頻率限制同時進入冷卻時間。
 
+### [MarkItDownAdapter](./infrastructure/adapters/markitdown_adapter.js)
+*   **功能**：將 HTML、PDF、DOCX、XLSX 等原生檔案預先轉換為簡潔的 Markdown。
+*   **行為**：結合本地 Python 虛擬環境中的 `markitdown` 工具，抓取文字並對圖片進行單次 OCR 解析。
+*   **價值**：實現 50% - 90% 的 Token 節約，且避免圖片在多輪對話中重複上傳被雙重計費。
+
+---
+
+## 1.5. API 客戶端 (API Clients)
+
+本系統封裝了多個 API Client，統一繼承自 `BaseClient` 並提供一致的 `_callModelApi` 接口：
+*   **[VertexAIClient](./infrastructure/clients/vertex_ai_client.js)**：專門負責 GCP Vertex AI 平台整合，透過服務帳戶 JSON 私鑰生成臨時 OAuth2 Token 來呼叫 Gemini 模型，解決 Studio 429 Prepay Bug。
+*   **[GeminiClient](./infrastructure/clients/gemini_client.js)**：支援標準 Google AI Studio Key 呼叫 Gemini 2.5/3.5 模型。
+*   **[NvidiaNimClient](./infrastructure/clients/nvidia_nim_client.js)**：呼叫 NVIDIA NIM 託管的 Llama-3.1 等開源模型 API。
+*   **[DeepSeekClient](./infrastructure/clients/deepseek_client.js)**：呼叫 DeepSeek 官方 API。
+
 ---
 
 ## 2. 服務層 (Services)
