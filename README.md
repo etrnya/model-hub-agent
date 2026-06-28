@@ -138,6 +138,19 @@ Agent OS implements several industrial-grade optimization mechanisms to minimize
 - **Source File**: [markitdown_adapter.js](file:///c:/Users/etrny/.gemini/antigravity/scratch/model-hub-agent/infrastructure/adapters/markitdown_adapter.js)
 - **Integration Test**: [test_markitdown_agent.js](file:///c:/Users/etrny/.gemini/antigravity/scratch/model-hub-agent/tests/test_markitdown_agent.js)
 
+## 🔗 Third-Party Open-Source Attributions
+
+This project integrates and references several excellent open-source projects. Special thanks to:
+
+*   **[free-claude-code](https://github.com/Alishahryar1/free-claude-code)**: Inspired the core self-healing and SilentFix architecture for AI agent resilience.
+*   **[Microsoft MarkItDown](https://github.com/microsoft/markitdown)**: A universal document-to-markdown converter. This project uses the customized local fork **[etrnya/markitdown](https://github.com/etrnya/markitdown)**.
+*   **[Headroom Context Shaper](https://github.com/headroomlabs-ai/headroom)**: Local context compression gateway providing SmartCrusher and CCR.
+*   **[CodeGraph](https://github.com/colbymchenry/codegraph)**: AST-based dependency analyzer and SQLite code search engine.
+*   **[Qdrant](https://github.com/qdrant/qdrant)**: High-performance vector database used for Phase 3 semantic memory cache.
+*   **[Neo4j Graph Database](https://github.com/neo4j/neo4j)**: Graph database used to map complex call chains and topologies.
+
+---
+
 ## 🙏 Acknowledgements & Evolution History
 
 This project was inspired by discussions within the [free-claude-code](https://github.com/Alishahryar1/free-claude-code) community. It has been extensively refactored and evolved into a resilient orchestration kernel specifically optimized for the **Antigravity** framework.
