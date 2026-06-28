@@ -61,7 +61,10 @@ class MarkItDownAdapter {
 
       console.log(`\n📄 [MarkItDownAdapter] Converting file: ${path.basename(filePath)} using ${cliPath}...`);
 
-      execFile(cliPath, args, { maxBuffer: 10 * 1024 * 1024 }, (error, stdout, stderr) => {
+      execFile(cliPath, args, { 
+        maxBuffer: 10 * 1024 * 1024,
+        env: { ...process.env, PYTHONIOENCODING: 'utf-8' }
+      }, (error, stdout, stderr) => {
         if (error) {
           // If the executable wasn't found or returned an error
           console.error(`❌ [MarkItDownAdapter] Conversion failed:`, stderr || error.message);
