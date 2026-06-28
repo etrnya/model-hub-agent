@@ -15,6 +15,8 @@
 | **非對稱驗證** | Asymmetric Verification | `VerificationGate` | 使用不同層級或供應商的模型交叉審查草稿，平衡成本與輸出邏輯精準度。 |
 | **文件預處理適配器** | MarkItDown Adapter | `MarkItDownAdapter` | 在將 HTML/PDF/Office 文件傳入 LLM 前，預先將其清理並轉為結構化 Markdown。 |
 | **金鑰健康診斷** | API Diagnostics | `runDiagnostics` | 主動且低成本地測試各平台 API 密鑰與帳單可用性，並呈現在健康儀表板。 |
+| **代碼圖譜適配器** | CodeGraph Adapter | `CodeGraphAdapter` | 介接本地端 AST 分析圖資料庫，實現外科手術式精準的程式符號與呼叫鏈查詢。 |
+| **上下文完整性閘門** | Context Integrity Gate | `ContextIntegrityGate` | 防止上下文雙重壓縮、追蹤 Provenance 來源並保護代碼寫入時的語意忠實度。 |
 
 ## 技術組件 (Technical Components)
 
@@ -24,4 +26,12 @@
 *   **Vertex AI (Agent Platform)**: Google Cloud Enterprise 企業級 AI 服務，直接與 Cloud Billing 接軌，解決 Studio 預付款 429 錯誤。
 *   **MarkItDown**: 微軟開源的 Python 萬能文件格式轉 Markdown 工具，支持 PDF、HTML、DOCX、XLSX 等。
 *   **gcp-key.json**: Google Cloud 服務帳戶的 JSON 金鑰憑證檔案，用於 Vertex AI OAuth2 的 Bearer 認證。
+*   **CodeGraph**: 基於 Tree-sitter 與 SQLite 的本地程式符號分析與依賴圖查詢引擎。
+*   **Headroom Context Shaper**: 本地運行的上下文壓縮優化網關，提供 SmartCrusher 與 CCR 可逆式壓縮功能。
 
+## 評估指標 (OS Metrics)
+
+*   **Context Fidelity Score (CFS)**: 評估上下文壓縮後是否仍保持 100% 原始位元忠實度（Bit-exact）。
+*   **Reasoning Drift Index (RDI)**: 評估同一個任務在不同 Context 優化策略下，模型推理輸出結構的相似度與偏移度。
+*   **Retrieval Efficiency (RE)**: 評估 CodeGraph Surgery 相比於暴力載入整個專案原始碼，所精簡下來的空間效率。
+*   **Compression Safety Ratio (CSR)**: 成功通過目標 Schema 驗證的任務佔比，反映壓縮過程是否引起致命數據遺失。
