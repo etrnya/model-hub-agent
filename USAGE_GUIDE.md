@@ -116,6 +116,39 @@ async function processFile() {
 
 ---
 
+## 7.5. Semantic Vector Memory Cache (Qdrant Integration)
+
+The project integrates local Qdrant Vector DB with Vertex AI `text-embedding-004` to persist successful task executions:
+
+-   **Exact Match (>= 99.9%)**: Returns cached outputs immediately, achieving **0-token cost and sub-second latency**.
+-   **Fuzzy Match (90% - 99.9%)**: Invokes `VerificationGate.auditMemory` to double-check relevance. Returns cache if passed; falls back to LLM execution if failed.
+-   **TTL Config**: Set `MEMORY_TTL_DAYS` in `.env` to automatically invalidate stale cache items.
+
+---
+
+## 7.6. Webhook API Server (Microservice Integration)
+
+Agent OS can be run as a microservice HTTP server:
+
+1.  **Start Server**:
+    Simply say **"Start Agent OS Server"** in chat, or run:
+    ```bash
+    npm run server
+    ```
+    It listens on `http://localhost:3000`.
+2.  **API Schema (POST `/dispatch`)**:
+    ```json
+    {
+      "objective": "Design an async JWT verification helper in Node.js",
+      "constraints": ["Use CommonJS", "Include error handling"],
+      "tags": ["coding", "security"],
+      "tier": "high"
+    }
+    ```
+    The server routes the request through CodeGraph, Headroom, Qdrant, and validation gates, returning standard JSON.
+
+---
+
 ## 8. 如何添加新模型？
 編輯 `registry/model_registry.js`，加入新的 `ModelCapabilitySchema` 即可。系統會自動根據您定義的 `performance_tier` 將其納入調度與備援清單。
 

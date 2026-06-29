@@ -110,6 +110,40 @@ async function processFile() {
 
 ---
 
+## 3.7. 語意向量記憶快取 (Qdrant 整合)
+
+專案整合了本地 Docker 運行的 **Qdrant 向量資料庫** 與 Vertex AI `text-embedding-004` 提取特徵，實現任務的持久化記憶：
+
+-   **完全命中 (>= 99.9%)**：如果任務目標完全一致，直接回傳快取結果，**0-Token 消耗且秒級響應**。
+-   **模糊命中 (90% - 99.9%)**：觸發 `VerificationGate.auditMemory` 快速稽核。若通過，則直接套用；若不通過，則自動退回主流程執行 LLM 推理。
+-   **設定時效 (TTL)**：可在 `.env` 中設定 `MEMORY_TTL_DAYS` (預設為 `7` 天) 來動態控制記憶生命週期，防止過期代碼干擾新開發。
+
+---
+
+## 3.8. Webhook API 自動啟動伺服器
+
+除了 CLI 連接外，Agent OS 現已微服務化。您可以透過啟動本地 Web 伺服器，讓外部編輯器、Git Hooks 或 CI/CD 自動呼叫：
+
+1.  **啟動伺服器**：
+    在 Antigravity 對話中說 **「幫我啟動 Agent OS 伺服器」**，或執行：
+    ```bash
+    npm run server
+    ```
+    它會在 `http://localhost:3000` 監聽。
+2.  **API 請求格式**：
+    透過 `POST /dispatch` 派發任務：
+    ```json
+    {
+      "objective": "請幫我寫一個 Node.js 函式，用於驗證 JWT Token 是否過期。",
+      "constraints": ["使用 CommonJS 語法", "必須包含錯誤處理"],
+      "tags": ["coding", "security"],
+      "tier": "high"
+    }
+    ```
+    系統會自動整合 CodeGraph 程式圖譜並跑完完整的 OS 安全與記憶快取流程，最後回傳 JSON 結果。
+
+---
+
 ## 4. 如何查看 Token 節省量？
 
 每次執行任務後，系統會自動在終端機輸出 **「Token 成本分析報告」**：

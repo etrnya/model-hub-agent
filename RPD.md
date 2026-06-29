@@ -62,6 +62,18 @@ graph TD
 ### ✅ 主動式金鑰健康診斷 (Diagnostic Health Check Tool)
 *   **主動式健檢**：一鍵向 Google AI Studio、GCP Vertex AI、NVIDIA NIM 及 DeepSeek 等所有註冊端點發送極小測試 Request，主動診斷並在終端機輸出清晰的健康狀態儀表板。
 
+### ✅ CodeGraph 本地圖譜導航 (AST Dependency Resolution)
+*   **AST 精確解析**：整合 Tree-sitter 與 SQLite，自動解析專案中函式與類別的 Callers/Callees 及定義行數。在任務執行前，將精確的關聯程式碼片段作為 pre-query 上下文注入，免除 LLM 的盲目搜尋與代碼幻覺。
+
+### ✅ CIG 與 Headroom Proxy 壓縮網關 (Context Engineering)
+*   **動態 Effort 控制**：開發 `ContextIntegrityGate` 與 CRIL 路由分流，對接 Docker 本地運行的 Headroom 壓縮網關。依據任務類型（寫代碼、讀文件、探勘）在 Tool 請求標頭中注入不同壓縮比（x-headroom-effort），在完整度與費用間取得黃金平衡。
+
+### ✅ Qdrant 語意向量記憶與模糊審計 (Vector Memory Layer)
+*   **100% LLM 繞過**：整合本地 Qdrant 向量庫與 Vertex AI `text-embedding-004`，儲存任務目標與成功執行的 JSON 結果。相似度 >= 99.9% 實現 0 Token 消耗與秒級響應；相似度 90% ~ 99.9% 觸發 Verification Gate 進行邏輯審計，防範過期或漂移的錯誤記憶污染。支援過期時效（MEMORY_TTL_DAYS）的自動清空與代謝。
+
+### ✅ API Webhook 自動觸發伺服器 (Agent OS Service)
+*   **微服務化接入**：實作輕量、零依賴的 Node.js HTTP 伺服器（監聽 3000 埠）。提供 `POST /dispatch` 接口與 `GET /health` 健康監控，使 Agent OS 從單純 CLI 轉化為可供 IDE 套件、CI/CD 管線或 Git Hooks 呼叫的微服務核心。
+
 ## 4. 狀態與一致性管理 (State Consistency)
 
 ### 4.1 具備日誌的狀態快照 (Snapshot with Change Log)
