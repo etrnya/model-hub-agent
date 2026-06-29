@@ -99,6 +99,55 @@ class DualVerificationGate {
       return { success: true, data: primaryResult, _warning: "Verification could not be completed." };
     }
   }
+
+  /**
+   * Audits a retrieved memory output to ensure it remains valid and doesn't violate constraints.
+   * @param {string} originalObjective - The new task's objective.
+   * @param {Object} cachedResult - The cached JSON result.
+   * @param {Function} clientFactory - A way to get a client instance for a model.
+   * @returns {Promise<boolean>} - True if the memory is valid, false otherwise.
+   */
+  async auditMemory(originalObjective, cachedResult, clientFactory) {
+    console.log("🛡️  [VerificationGate] Auditing retrieved vector memory...");
+
+    // Pick a cheap model for auditing
+    const verificationRequirements = {
+      modalities: ["text"],
+      preferredTier: "base"
+    };
+    const validatorModel = router.route(verificationRequirements);
+    const validatorClient = clientFactory(validatorModel);
+
+    const promptObj = {
+      task_id: "verify-memory",
+      objective: "Check if the cached result logically and structurally answers the new objective. Pay attention to specific variables, file names, and parameters.",
+      new_objective: originalObjective,
+      cached_result: JSON.stringify(cachedResult),
+      instruction: "Determine if the cached result is a valid and correct answer to the new objective. If the new objective asks for different files, names, or logic, it must fail. Respond with true/false inside the valid field."
+    };
+
+    try {
+      const auditResult = await validatorClient.execute(promptObj, {
+        type: "object",
+        properties: {
+          valid: { type: "boolean" },
+          reason: { type: "string" }
+        },
+        required: ["valid", "reason"]
+      });
+
+      if (auditResult.valid) {
+        console.log("✅ [VerificationGate] Vector memory PASSED audit.");
+        return true;
+      } else {
+        console.warn("⚠️  [VerificationGate] Vector memory FAILED audit:", auditResult.reason);
+        return false;
+      }
+    } catch (e) {
+      console.warn("⚠️  [VerificationGate] Memory audit failed, defaulting to pass (fail-open):", e.message);
+      return true;
+    }
+  }
 }
 
 module.exports = new DualVerificationGate();

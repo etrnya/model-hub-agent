@@ -143,8 +143,20 @@ class MemoryManager {
       if (results.length > 0) {
         const match = results[0];
         if (match.score >= threshold) {
+          // Check TTL expiration
+          const ttlDays = parseInt(process.env.MEMORY_TTL_DAYS || '7');
+          const ttlMs = ttlDays * 24 * 60 * 60 * 1000;
+          const ageMs = Date.now() - (match.payload.timestamp || 0);
+          if (ageMs > ttlMs) {
+            console.log(`ℹ️ [MemoryManager] Memory match found (score ${(match.score * 100).toFixed(1)}%), but expired (age: ${(ageMs / (24 * 60 * 60 * 1000)).toFixed(1)} days, limit: ${ttlDays} days)`);
+            return null;
+          }
+
           console.log(`🎯 [MemoryManager] Memory HIT! Found past successful execution with similarity ${(match.score * 100).toFixed(1)}%`);
-          return match.payload.result;
+          return {
+            score: match.score,
+            result: match.payload.result
+          };
         } else {
           console.log(`ℹ️ [MemoryManager] Memory match found, but score ${(match.score * 100).toFixed(1)}% is below threshold ${(threshold * 100).toFixed(1)}%`);
         }
