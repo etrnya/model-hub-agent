@@ -3,6 +3,9 @@ const heartbeatRegistry = require('../registry/heartbeat_registry');
 const NvidiaNimClient = require('../infrastructure/clients/nvidia_nim_client');
 const GeminiClient = require('../infrastructure/clients/gemini_client');
 const DeepSeekClient = require('../infrastructure/clients/deepseek_client');
+const VertexAIClient = require('../infrastructure/clients/vertex_ai_client');
+const CodeGraphAdapter = require('../infrastructure/adapters/codegraph_adapter');
+const codegraph = new CodeGraphAdapter();
 
 /**
  * CascadingExecutor
@@ -13,7 +16,8 @@ class CascadingExecutor {
     this.clientMap = {
       'nvidia-nim': NvidiaNimClient,
       'google': GeminiClient,
-      'deepseek': DeepSeekClient
+      'deepseek': DeepSeekClient,
+      'vertex-ai': VertexAIClient
     };
   }
 
@@ -25,6 +29,61 @@ class CascadingExecutor {
    */
   async execute(context, schema, options = {}) {
     const { preferredTier = 'high', maxRetries = 3 } = options;
+
+    const memoryManager = require('../infrastructure/adapters/memory_manager');
+    const threshold = parseFloat(process.env.MEMORY_SIMILARITY_THRESHOLD || '0.90');
+    const cachedMemory = await memoryManager.searchMemory(context.objective, threshold);
+    if (cachedMemory) {
+      let isMemoryValid = true;
+      // If similarity is not 100% exact (e.g. < 99.9%), run it through Verification Gate audit
+      if (cachedMemory.score < 0.999) {
+        const verificationGate = require('./verification_gate');
+        const clientFactory = (cap) => {
+          const Cls = this.clientMap[cap.provider];
+          return new Cls({ modelCapability: cap });
+        };
+        isMemoryValid = await verificationGate.auditMemory(context.objective, cachedMemory.result, clientFactory);
+      }
+
+      if (isMemoryValid) {
+        console.log(`✨ [CascadingExecutor] Bypassed LLM execution by retrieving cached result from Qdrant Memory.`);
+        Object.assign(context, cachedMemory.result);
+        const tokenMonitor = require('../observability/token_monitor');
+        tokenMonitor.record('memory-cache', 0, 0, 0);
+        return {
+          success: true,
+          data: cachedMemory.result,
+          modelUsed: {
+            model_id: 'qdrant-memory-cache',
+            provider: 'memory-cache',
+            tier: 'high',
+            context_window: 1000000,
+            max_output_tokens: 1000000,
+            cost_per_1k_input: 0,
+            cost_per_1k_output: 0
+          },
+          attempts: 1
+        };
+      } else {
+        console.log(`🔄 [CascadingExecutor] Memory audit failed. Proceeding to normal LLM execution...`);
+      }
+    }
+
+    // Inject CodeGraph context if not already present
+    if (!context.code_context) {
+      console.log(`\n🕸️  [CascadingExecutor] Running CodeGraph Pre-Query Context Injection...`);
+      const codeCtx = await codegraph.extractAndBuildRelations(context.objective, context.constraints);
+      if (codeCtx) {
+        context.code_context = codeCtx;
+        console.log(`✅ [CascadingExecutor] Injected ${codeCtx.length} chars of CodeGraph context.`);
+      } else {
+        console.log(`ℹ️  [CascadingExecutor] No CodeGraph context found for this task.`);
+      }
+    }
+    
+    // Run Context Integrity Gate (CIG) to evaluate context and prepare headers
+    const cig = require('../infrastructure/adapters/context_integrity_gate');
+    const processedContext = cig.process(context);
     
     // 1. Get ordered candidates from router
     const candidates = router.getCandidates({
@@ -56,15 +115,18 @@ class CascadingExecutor {
         });
 
         // 3. Run execution
-        const result = await client.execute(context, schema);
+        const result = await client.execute(processedContext, schema);
         
         console.log(`✅ [CascadingExecutor] Success with ${capability.model_id}!`);
         
         // Record usage to monitor
         const tokenMonitor = require('../observability/token_monitor');
-        const inputTokens = JSON.stringify(context).length / 4;
+        const inputTokens = JSON.stringify(processedContext).length / 4;
         const outputTokens = JSON.stringify(result).length / 4;
         tokenMonitor.record(capability.provider, inputTokens, inputTokens, outputTokens);
+
+        // Phase 3: Save successful task execution to memory
+        await memoryManager.saveMemory(context.objective, result);
 
         return {
           success: true,
@@ -78,7 +140,7 @@ class CascadingExecutor {
         console.error(`⚠️  [CascadingExecutor] Failed with ${capability.model_id}: ${error.message}`);
         
         // Mark as degraded in heartbeat to avoid immediate reuse by other components
-        heartbeatRegistry.recordFailure(capability.provider, error.message);
+        heartbeatRegistry.record(capability.provider, 0, false);
         
         console.log(`🔄 [CascadingExecutor] Cascading to next available model...`);
         // Continue to next candidate

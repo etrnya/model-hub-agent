@@ -10,7 +10,9 @@
     "test:guardrail": "node tests/test_guardrail.js",
     "test:markitdown": "node tests/test_markitdown_agent.js",
     "diagnose": "node tests/diagnose_keys.js",
-    "batch-convert": "node scripts/batch_convert.js"
+    "batch-convert": "node scripts/batch_convert.js",
+    "benchmark": "node tests/benchmark_runner.js",
+    "server": "node server.js"
   },
   "keywords": [
     "antigravity",

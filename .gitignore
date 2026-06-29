@@ -20,3 +20,9 @@ Thumbs.db
 # Credentials / Keys
 *key*.json
 gemini-api-ai-assistant-*.json
+
+# CodeGraph Database
+.codegraph/
+
+# Benchmark Results
+tests/results/

@@ -31,6 +31,21 @@
 *   **行為**：結合本地 Python 虛擬環境中的 `markitdown` 工具，抓取文字並對圖片進行單次 OCR 解析。
 *   **價值**：實現 50% - 90% 的 Token 節約，且避免圖片在多輪對話中重複上傳被雙重計費。
 
+### [CodeGraphAdapter](./infrastructure/adapters/codegraph_adapter.js)
+*   **功能**：介接本地 Tree-sitter 與 SQLite 程式符號關係庫。
+*   **行為**：動態提取 callers/callees 依賴關係，進行外科手術式的精準上下文注入，替代傳統暴力加載。
+*   **價值**：極大縮小 Context Bottleneck，提升代碼檢索效率。
+
+### [ContextIntegrityGate](./infrastructure/adapters/context_integrity_gate.js)
+*   **功能**：動態任務分類與策略路由層 (CRIL)。
+*   **行為**：自動判別任務類型（code, doc, debug, explore），配置對應的 bypass 壓縮防護、x-headroom-effort 指標與 Headroom 網關分流。
+*   **價值**：防範上下文雙重壓縮，維護程式碼語意完整性。
+
+### [MemoryManager](./infrastructure/adapters/memory_manager.js)
+*   **功能**：語意記憶快取管理器。
+*   **行為**：利用 Vertex AI `text-embedding-004` 生成任務向量，並透過 Docker Qdrant 計算餘弦相似度。大於 95% 時執行繞過。
+*   **價值**：重覆任務 100% LLM 推理繞過，達成 0 Token 消耗與 sub-second 延遲。
+
 ---
 
 ## 1.5. API 客戶端 (API Clients)

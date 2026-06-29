@@ -81,14 +81,16 @@ class GeminiClient extends BaseClient {
       }],
       generationConfig: {
         temperature: 0.2,
+        max_output_tokens: 8192,
         response_mime_type: "application/json" // Force JSON output for Gemini
       }
     };
 
     try {
-      const response = await fetch(url, {
+      const routed = this.resolveRequestRoute(url, headers, payload.integrity_headers || {});
+      const response = await fetch(routed.url, {
         method: "POST",
-        headers: headers,
+        headers: routed.headers,
         body: JSON.stringify(requestBody)
       });
 
