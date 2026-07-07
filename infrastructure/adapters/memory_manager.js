@@ -8,6 +8,7 @@ const crypto = require('crypto');
 class MemoryManager {
   constructor() {
     this.qdrantUrl = process.env.QDRANT_URL || 'http://localhost:6333';
+    this.collectionName = 'global_shared_memory';
   }
 
   /**
@@ -77,11 +78,11 @@ class MemoryManager {
   }
 
   /**
-   * Initializes the 'task_memory' collection in Qdrant if it doesn't already exist.
+   * Initializes the 'global_shared_memory' collection in Qdrant if it doesn't already exist.
    */
   async initCollection() {
     try {
-      const checkRes = await fetch(`${this.qdrantUrl}/collections/task_memory`);
+      const checkRes = await fetch(`${this.qdrantUrl}/collections/${this.collectionName}`);
       if (checkRes.ok) {
         return; // Already exists
       }
@@ -90,9 +91,9 @@ class MemoryManager {
       return;
     }
 
-    console.log(`🧠 [MemoryManager] Creating 'task_memory' collection in Qdrant...`);
+    console.log(`🧠 [MemoryManager] Creating '${this.collectionName}' collection in Qdrant...`);
     try {
-      const createRes = await fetch(`${this.qdrantUrl}/collections/task_memory`, {
+      const createRes = await fetch(`${this.qdrantUrl}/collections/${this.collectionName}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -103,7 +104,7 @@ class MemoryManager {
         })
       });
       if (createRes.ok) {
-        console.log(`✅ [MemoryManager] Collection 'task_memory' created successfully.`);
+        console.log(`✅ [MemoryManager] Collection '${this.collectionName}' created successfully.`);
       } else {
         const txt = await createRes.text();
         console.error(`❌ [MemoryManager] Failed to create collection: ${txt}`);
@@ -124,7 +125,7 @@ class MemoryManager {
 
     try {
       const embedding = await this.getEmbedding(objective);
-      const searchRes = await fetch(`${this.qdrantUrl}/collections/task_memory/points/search`, {
+      const searchRes = await fetch(`${this.qdrantUrl}/collections/${this.collectionName}/points/search`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -181,7 +182,7 @@ class MemoryManager {
       // Format as MD5 UUID compatible string for Qdrant compatibility
       const id = `${hash.slice(0, 8)}-${hash.slice(8, 12)}-${hash.slice(12, 16)}-${hash.slice(16, 20)}-${hash.slice(20, 32)}`;
 
-      const upsertRes = await fetch(`${this.qdrantUrl}/collections/task_memory/points`, {
+      const upsertRes = await fetch(`${this.qdrantUrl}/collections/${this.collectionName}/points`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

@@ -1,29 +1,28 @@
-# Antigravity 專案開發規範 (Project Agent Rules)
+# model-hub-agent 專案 - AI 助理開發與防坑指南
 
-## 🚫 網址（URL）節流建議策略
-為防止瀏覽器代理開啟大體積網頁（例如 Notion、GitHub、新聞部落格）時造成的 Token 噴發與截圖浪費，任何 AI 代理人在面對 URL 連結時，**必須**遵循以下流程：
-
-1. **域名自動路由**：
-   - 若為 `notion.so` 的網址，**必須優先使用 Notion MCP 工具**獲取結構化 Markdown。禁止使用任何瀏覽器。
-   - 若為 `github.com` 的程式碼連結，**必須優先使用 GitHub MCP** 或直接轉換為 `raw.githubusercontent.com` 下載原始文字。
-2. **預設輕量讀取**：
-   - 處理一般部落格、技術文件、新聞或靜態網頁時，**必須預設使用 `read_url_content`**（提取乾淨的 Markdown 內容，節省 95% 以上 Token）。
-3. **瀏覽器降級與確認機制**：
-   - **禁止主動使用 `browser_subagent`**。
-   - 僅在 `read_url_content` 被 Cloudflare 阻擋或該網頁完全為客戶端 JS 動態渲染、且嘗試其他方式失敗時，方可**向用戶說明原因並詢問是否啟用 `browser_subagent` 進行瀏覽**。
+本文件定義了 `model-hub-agent` (Agent OS 核心) 專案特定的多模型調度、Qdrant 語意記憶與級聯容災防線規則。
 
 ---
 
-## 💾 本地讀取與搜尋節流策略
-在讀取或搜尋本機專案目錄與檔案時，為避免龐大的目錄資訊與過長的文件耗盡 Context Token，請嚴格遵守以下操作：
+## 🛠️ 1. 技術棧與架構
 
-1. **排除名單 (Exclude Patterns) 強制隔離**：
-   - 在執行目錄遍歷（`list_dir`）或全文檢索（`grep_search`）時，**必須自動過濾並排除以下目錄**：
-     `node_modules/`、`.git/`、`.venv/`、`dist/`、`build/`、`package-lock.json`、`yarn.lock`。
-2. **「先 Grep 定位，後範圍 View」**：
-   - **嚴禁**在未確認位置的情況下，直接讀取整個大於 500 行的程式碼檔案。
-   - 應優先使用 `grep_search` 搜尋關鍵變數或函數，取得行號後，**僅使用 `view_file` 讀取對應的局部行號範圍（如 L20-L80）**。
-3. **大檔案與二進制自動阻斷（MarkItDown 轉換）**：
-   - 若檔案大於 200KB（如 HTML 文件、PDF 報告、DOCX 手冊、XLSX 表格），**嚴禁**直接當作文字讀取。
-   - 必須引導或在背景自動調用本地的 `MarkItDown` 轉檔工具，將其轉換為簡潔的 Markdown 文字後，方可載入至上下文中讀取。對於圖片，轉換時調用一次 Vision 模組進行 OCR，後續直接重複利用文字，防範視覺 Token 重複扣除。
+- **核心技術**：Node.js (TypeScript)。
+- **語意記憶**：Qdrant 向量資料庫 (Docker 運行) + `text-embedding-004`。
+- **級聯調度**：GCP Vertex AI (後付款、穩定備援) + Google AI Studio (首選低延遲)。
+- **脈絡壓縮**：Context Integrity Gate (CIG) 門禁網關。
 
+---
+
+## 🚫 2. 專案專屬地雷 (AI 必須遵循的防線)
+
+### A. Qdrant 向量維度對齊與連接池
+* **地雷原因**：在執行 Task 語意比對時，若 Collection 建立的維度（如 `text-embedding-004` 預設為 768 維）與發送的 Query 向量維度不符，Qdrant 會拋出 Invalid Argument 錯誤並完全拒絕連線。
+* **開發規則**：建立或重置 Qdrant Collection 時，必須嚴格鎖定向量長度，並在代碼端進行維度校驗。
+
+### B. 級聯執行器 (Cascading Executor) 容災防線
+* **地雷原因**：當 AI Studio 拋出 `429 Resource Exhausted` 額度用盡或計費異常時，若容災機制未被觸發，會直接導致上層的 Code Generator 任務中斷。
+* **開發規則**：級聯執行器在攔截到 `429` 錯誤時，**必須在 200 毫秒內無縫自動切換**至 GCP Vertex AI 用戶端，並使用預先配置的 Service Account Key 完成請求，保障高可用性。
+
+### C. Context Compression 門禁臨界值 (防止代碼渙散)
+* **地雷原因**：為了節省 Token 費用，網關會對上下文進行有損壓縮。如果對重構任務的代碼文件進行了過度壓縮，LLM 會因丟失上下文而產生代碼幻覺（如刪除沒看見的函數）。
+* **開發規則**：在涉及重構 (refactor) 或除錯 (debug) 任務時，CIG 門禁必須自動繞過壓縮，提供 100% 完整代碼庫上下文；僅在問答 (query/explain) 任務時啟用 Context 壓縮。

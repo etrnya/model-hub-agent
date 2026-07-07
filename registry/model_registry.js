@@ -29,22 +29,7 @@ class ModelRegistry {
         performance_tier: "base",
         limits: { rpm: 60, tpm: 1000000 }
       },
-      {
-        model_id: "vertex/gemini-1.5-flash-002",
-        provider: "vertex-ai",
-        context_window: 1000000,
-        supported_modalities: ["text", "vision", "audio", "tool_use"],
-        performance_tier: "base",
-        limits: { rpm: 60, tpm: 1000000 }
-      },
-      {
-        model_id: "vertex/gemini-1.5-flash",
-        provider: "vertex-ai",
-        context_window: 1000000,
-        supported_modalities: ["text", "vision", "audio", "tool_use"],
-        performance_tier: "base",
-        limits: { rpm: 60, tpm: 1000000 }
-      },
+      // Note: Gemini 1.5 Flash models are de-prioritized to avoid outdated knowledge bases
       {
         model_id: "deepseek-chat",
         provider: "deepseek",
@@ -52,6 +37,22 @@ class ModelRegistry {
         supported_modalities: ["text", "tool_use"],
         performance_tier: "high",
         limits: { rpm: 100, tpm: 100000 }
+      },
+      {
+        model_id: "vertex/gemini-2.5-pro",
+        provider: "vertex-ai",
+        context_window: 1000000,
+        supported_modalities: ["text", "vision", "audio", "tool_use"],
+        performance_tier: "high",
+        limits: { rpm: 60, tpm: 1000000 }
+      },
+      {
+        model_id: "vertex/gemini-1.5-pro-002",
+        provider: "vertex-ai",
+        context_window: 1000000,
+        supported_modalities: ["text", "vision", "audio", "tool_use"],
+        performance_tier: "high",
+        limits: { rpm: 60, tpm: 1000000 }
       },
       {
         model_id: "meta/llama-3.1-70b-instruct",
