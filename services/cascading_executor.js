@@ -8,6 +8,39 @@ const CodeGraphAdapter = require('../infrastructure/adapters/codegraph_adapter')
 const codegraph = new CodeGraphAdapter();
 
 /**
+ * Detects required modalities based on objective keywords and tags.
+ * (Multimodal-Aware Routing)
+ */
+function detectRequiredModalities(context) {
+  const modalities = ["text"];
+  const objective = (context.objective || '').toLowerCase();
+  const tags = context.tags || [];
+
+  // Check for Vision
+  const hasVisionTag = tags.includes('vision') || tags.includes('image') || tags.includes('ocr');
+  const hasVisionKeywords = objective.includes('.png') || objective.includes('.jpg') || objective.includes('.jpeg') || objective.includes('.webp') || objective.includes('.gif') || objective.includes('圖片') || objective.includes('圖像') || objective.includes('影像') || objective.includes('image') || objective.includes('picture');
+  
+  if (hasVisionTag || hasVisionKeywords) {
+    modalities.push('vision');
+  }
+
+  // Check for Audio
+  const hasAudioTag = tags.includes('audio') || tags.includes('voice');
+  const hasAudioKeywords = objective.includes('.mp3') || objective.includes('.wav') || objective.includes('語音') || objective.includes('錄音') || objective.includes('聲音') || objective.includes('audio') || objective.includes('voice');
+  
+  if (hasAudioTag || hasAudioKeywords) {
+    modalities.push('audio');
+  }
+
+  // Check for Tool Use
+  if (tags.includes('tool_use') || tags.includes('tools')) {
+    modalities.push('tool_use');
+  }
+
+  return modalities;
+}
+
+/**
  * CascadingExecutor
  * Ensures task completion by automatically falling back to secondary models if the primary fails.
  */
@@ -85,9 +118,12 @@ class CascadingExecutor {
     const cig = require('../infrastructure/adapters/context_integrity_gate');
     const processedContext = cig.process(context);
     
-    // 1. Get ordered candidates from router
+    // 1. Get ordered candidates from router (Multimodal-Aware Routing)
+    const requiredModalities = detectRequiredModalities(context);
+    console.log(`📡 [CascadingExecutor] Required modalities detected: [${requiredModalities.join(', ')}]`);
+
     const candidates = router.getCandidates({
-      modalities: ["text"],
+      modalities: requiredModalities,
       preferredTier: preferredTier
     });
 
@@ -95,6 +131,8 @@ class CascadingExecutor {
 
     let lastError = null;
     let attempts = 0;
+    let cumulativeTokens = 0;
+    const maxBudgetTokens = parseInt(process.env.MAX_TASK_BUDGET_TOKENS || '150000', 10);
 
     // 2. Loop through candidates until success
     for (const capability of candidates) {
@@ -119,6 +157,16 @@ class CascadingExecutor {
         
         console.log(`✅ [CascadingExecutor] Raw execution success with ${capability.model_id}.`);
 
+        // Track cumulative tokens for budget guard
+        const primaryInputTokens = JSON.stringify(processedContext).length / 4;
+        const primaryOutputTokens = JSON.stringify(result).length / 4;
+        cumulativeTokens += (primaryInputTokens + primaryOutputTokens);
+        console.log(`📊 [BudgetGuard] Cumulative tokens: ${cumulativeTokens}/${maxBudgetTokens}`);
+
+        if (cumulativeTokens > maxBudgetTokens) {
+          throw new Error(`[CircuitBreaker] Cumulative task tokens exceeded budget limit of ${maxBudgetTokens}. Current: ${cumulativeTokens}`);
+        }
+
         // Run Verification Gate
         const verificationGate = require('./verification_gate');
         const clientFactory = (cap) => {
@@ -133,6 +181,13 @@ class CascadingExecutor {
           tier: preferredTier,
           tags: context.tags || []
         };
+
+        // Add approximate tokens for verification check call
+        const approxAuditInput = JSON.stringify(auditContext).length / 4;
+        cumulativeTokens += (approxAuditInput + 150); // validator output is small
+        if (cumulativeTokens > maxBudgetTokens) {
+          throw new Error(`[CircuitBreaker] Cumulative task tokens exceeded budget limit of ${maxBudgetTokens}. Current: ${cumulativeTokens}`);
+        }
 
         let verification = await verificationGate.verify(result, auditContext, clientFactory);
 
@@ -160,8 +215,25 @@ class CascadingExecutor {
 
             try {
               const correctedResult = await client.execute(correctionPayload, schema);
+              
+              // Track budget for self-correction call
+              const corrInput = JSON.stringify(correctionPayload).length / 4;
+              const corrOutput = JSON.stringify(correctedResult).length / 4;
+              cumulativeTokens += (corrInput + corrOutput);
+              console.log(`📊 [BudgetGuard] Cumulative tokens after self-correction: ${cumulativeTokens}/${maxBudgetTokens}`);
+
+              if (cumulativeTokens > maxBudgetTokens) {
+                throw new Error(`[CircuitBreaker] Cumulative task tokens exceeded budget limit of ${maxBudgetTokens}. Current: ${cumulativeTokens}`);
+              }
+
               console.log(`✨ [CascadingExecutor] Self-corrected output generated. Re-verifying...`);
               
+              // Add tokens for verification audit
+              cumulativeTokens += (approxAuditInput + 150);
+              if (cumulativeTokens > maxBudgetTokens) {
+                throw new Error(`[CircuitBreaker] Cumulative task tokens exceeded budget limit of ${maxBudgetTokens}. Current: ${cumulativeTokens}`);
+              }
+
               const reVerification = await verificationGate.verify(correctedResult, auditContext, clientFactory);
               if (reVerification.success) {
                 console.log(`🟢 [CascadingExecutor] Self-Correction Successful!`);
@@ -175,6 +247,9 @@ class CascadingExecutor {
             } catch (err) {
               console.error(`❌ [CascadingExecutor] Error during self-correction: ${err.message}`);
               lastReason = err.message;
+              if (err.message.includes('[CircuitBreaker]')) {
+                throw err;
+              }
             }
           }
 
@@ -208,6 +283,12 @@ class CascadingExecutor {
         // Mark as degraded in heartbeat to avoid immediate reuse by other components
         heartbeatRegistry.record(capability.provider, 0, false);
         
+        // Circuit Breaker abort check
+        if (error.message.includes('[CircuitBreaker]')) {
+          console.error(`🛑 [CascadingExecutor] Circuit Breaker tripped. Halting execution!`);
+          throw error;
+        }
+
         console.log(`🔄 [CascadingExecutor] Cascading to next available model...`);
         // Continue to next candidate
       }

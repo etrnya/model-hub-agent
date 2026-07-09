@@ -1,0 +1,56 @@
+[
+  {
+    "timestamp": "2026-07-09T12:11:57.807Z",
+    "model_id": "deepseek-chat",
+    "provider": "deepseek",
+    "latency": 2,
+    "similarity": 0,
+    "passed": false,
+    "error": "Cannot read properties of undefined (reading 'rpm')"
+  },
+  {
+    "timestamp": "2026-07-09T12:11:57.809Z",
+    "model_id": "vertex/gemini-2.5-flash",
+    "provider": "vertex-ai",
+    "latency": 1,
+    "similarity": 0,
+    "passed": false,
+    "error": "Cannot read properties of undefined (reading 'rpm')"
+  },
+  {
+    "timestamp": "2026-07-09T12:12:25.062Z",
+    "model_id": "deepseek-chat",
+    "provider": "deepseek",
+    "latency": 1829,
+    "similarity": 0.8347,
+    "passed": true,
+    "outputLength": 353
+  },
+  {
+    "timestamp": "2026-07-09T12:12:28.133Z",
+    "model_id": "vertex/gemini-2.5-flash",
+    "provider": "vertex-ai",
+    "latency": 3070,
+    "similarity": 0,
+    "passed": false,
+    "error": "[BaseClient] Failed after 3 attempts. Last error: [HUB_UNKNOWN_ERROR] Network or execution error on Vertex AI: fetch failed"
+  },
+  {
+    "timestamp": "2026-07-09T12:12:57.919Z",
+    "model_id": "deepseek-chat",
+    "provider": "deepseek",
+    "latency": 1975,
+    "similarity": 0.9881,
+    "passed": true,
+    "outputLength": 353
+  },
+  {
+    "timestamp": "2026-07-09T12:13:13.969Z",
+    "model_id": "vertex/gemini-2.5-flash",
+    "provider": "vertex-ai",
+    "latency": 15447,
+    "similarity": 0.9428,
+    "passed": true,
+    "outputLength": 1213
+  }
+]
