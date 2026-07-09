@@ -115,9 +115,75 @@ class CascadingExecutor {
         });
 
         // 3. Run execution
-        const result = await client.execute(processedContext, schema);
+        let result = await client.execute(processedContext, schema);
         
-        console.log(`✅ [CascadingExecutor] Success with ${capability.model_id}!`);
+        console.log(`✅ [CascadingExecutor] Raw execution success with ${capability.model_id}.`);
+
+        // Run Verification Gate
+        const verificationGate = require('./verification_gate');
+        const clientFactory = (cap) => {
+          const Cls = this.clientMap[cap.provider];
+          return new Cls({ modelCapability: cap });
+        };
+
+        const auditContext = {
+          ...context,
+          primaryModelId: capability.model_id,
+          primaryProvider: capability.provider,
+          tier: preferredTier,
+          tags: context.tags || []
+        };
+
+        let verification = await verificationGate.verify(result, auditContext, clientFactory);
+
+        if (!verification.success) {
+          console.log(`🔄 [CascadingExecutor] Verification failed for ${capability.model_id}. Initiating Self-Correction Loop...`);
+          
+          let correctionAttempts = 0;
+          const maxCorrectionAttempts = 3;
+          let correctionSuccess = false;
+          let lastResult = result;
+          let lastReason = verification.reason;
+
+          while (correctionAttempts < maxCorrectionAttempts && !correctionSuccess) {
+            correctionAttempts++;
+            console.log(`🔄 [CascadingExecutor] Self-Correction Attempt ${correctionAttempts}/${maxCorrectionAttempts}...`);
+
+            const correctionPayload = {
+              ...processedContext,
+              _correction_feedback: {
+                previous_failed_output: lastResult,
+                validation_error: lastReason,
+                instruction: "Your previous output violated the constraints. Please carefully review the validation_error and correct the JSON output. Do NOT repeat the violation."
+              }
+            };
+
+            try {
+              const correctedResult = await client.execute(correctionPayload, schema);
+              console.log(`✨ [CascadingExecutor] Self-corrected output generated. Re-verifying...`);
+              
+              const reVerification = await verificationGate.verify(correctedResult, auditContext, clientFactory);
+              if (reVerification.success) {
+                console.log(`🟢 [CascadingExecutor] Self-Correction Successful!`);
+                result = correctedResult;
+                correctionSuccess = true;
+              } else {
+                console.warn(`⚠️  [CascadingExecutor] Self-Correction failed validation: ${reVerification.reason}`);
+                lastResult = correctedResult;
+                lastReason = reVerification.reason;
+              }
+            } catch (err) {
+              console.error(`❌ [CascadingExecutor] Error during self-correction: ${err.message}`);
+              lastReason = err.message;
+            }
+          }
+
+          if (!correctionSuccess) {
+            throw new Error(`Model output did not pass verification after ${maxCorrectionAttempts} self-correction attempts. Reason: ${lastReason}`);
+          }
+        }
+
+        console.log(`✅ [CascadingExecutor] Final success with ${capability.model_id}!`);
         
         // Record usage to monitor
         const tokenMonitor = require('../observability/token_monitor');

@@ -57,28 +57,9 @@ async function dispatchTask(taskPayload, outputSchema, tier = "base") {
     const primaryResult = executionResult.data;
     const capability = executionResult.modelUsed;
     
-    // 5. 雙重驗證閘門 (Dual-Verification)
-    const verificationGate = require('./services/verification_gate');
-    const context = {
-      ...currentSnapshot,
-      primaryModelId: capability.model_id,
-      tier: tier,
-      tags: taskPayload.tags || []
-    };
-
-    const clientFactory = (cap) => {
-      const Cls = clientMap[cap.provider];
-      return new Cls({ modelCapability: cap });
-    };
-
-    const verification = await verificationGate.verify(primaryResult, context, clientFactory);
-
-    if (!verification.success) {
-       console.log("🔄 [Agent OS] 驗證失敗，正在嘗試自我修正 (未實作，目前僅記錄)...");
-       // TODO: Implement self-correction loop here
-    }
-
-    const finalData = verification.data || primaryResult;
+    // 5. 雙重驗證閘門 (Dual-Verification) 與自我修正
+    // 註：雙重驗證與自我修正循環已整合在 CascadingExecutor 中，確保輸出至此的資料已完全通過驗證。
+    const finalData = executionResult.data;
 
     // 6. 更新狀態
     const updateSuccess = stateManager.update(finalData, currentSnapshot.version);
