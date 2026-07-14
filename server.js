@@ -296,7 +296,7 @@ const server = http.createServer(async (req, res) => {
           return;
         }
 
-        const taskPayload = { objective, constraints, tags };
+        const taskPayload = { objective, constraints, tags, code_context: payload.code_context };
         const targetSchema = schema || defaultSchema;
 
         console.log(`\n🕸️  [Agent OS Server] Dispatching task via API: "${objective.slice(0, 60)}..."`);
