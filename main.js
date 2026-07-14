@@ -78,8 +78,10 @@ async function dispatchTask(taskPayload, outputSchema, tier = "base") {
     console.log("\n📊 [系統觀測指標]:");
     console.table(heartbeatRegistry.getAllStats());
 
+    return finalData;
   } catch (error) {
     console.error("\n❌ [系統回報錯誤]:", error.message);
+    throw error;
   }
 }
 
