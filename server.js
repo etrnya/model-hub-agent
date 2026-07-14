@@ -9,6 +9,26 @@ const benchmarkRunner = require('./tests/benchmark_runner');
 
 const PORT = process.env.AGENT_OS_PORT || 3000;
 
+// SSE Client pool and emitter integration
+const globalEmitter = require('./shared/global_emitter');
+let sseClients = [];
+
+function broadcastEvent(eventType, eventData) {
+  const packet = `event: ${eventType}\ndata: ${JSON.stringify(eventData)}\n\n`;
+  sseClients.forEach(client => {
+    try {
+      client.write(packet);
+    } catch (err) {
+      // Remove stale client
+      sseClients = sseClients.filter(c => c !== client);
+    }
+  });
+}
+
+globalEmitter.on('task-status', (data) => broadcastEvent('task-status', data));
+globalEmitter.on('token-record', (data) => broadcastEvent('token-record', data));
+globalEmitter.on('circuit-breaker', (data) => broadcastEvent('circuit-breaker', data));
+
 // Default response schema if none provided by client
 const defaultSchema = {
   type: "object",
@@ -42,6 +62,40 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  // Serve iPAS static files directly to avoid duplicate server and CORS issues
+  if (req.method === 'GET' && req.url.startsWith('/ipas/')) {
+    try {
+      let relativePath = req.url.slice(6);
+      if (!relativePath || relativePath.endsWith('/')) {
+        relativePath += 'index.html';
+      }
+      const safePath = path.normalize(relativePath).replace(/^(\.\.[\/\\])+/, '');
+      const filePath = path.join(__dirname, '../iPAS_AI_exam', safePath);
+      
+      if (fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
+        const ext = path.extname(filePath);
+        let contentType = 'text/plain';
+        if (ext === '.html') contentType = 'text/html; charset=utf-8';
+        else if (ext === '.js') contentType = 'application/javascript; charset=utf-8';
+        else if (ext === '.css') contentType = 'text/css; charset=utf-8';
+        else if (ext === '.json') contentType = 'application/json; charset=utf-8';
+        else if (ext === '.png') contentType = 'image/png';
+        else if (ext === '.jpg' || ext === '.jpeg') contentType = 'image/jpeg';
+        else if (ext === '.webp') contentType = 'image/webp';
+        
+        res.writeHead(200, { 'Content-Type': contentType });
+        res.end(fs.readFileSync(filePath));
+        return;
+      }
+    } catch (err) {
+      console.warn(`[Server] Static file serve failed: ${err.message}`);
+    }
+    
+    res.writeHead(404, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: "File not found under iPAS platform" }));
+    return;
+  }
+
   // Dashboard Page Routing
   if (req.method === 'GET' && (req.url === '/' || req.url === '/dashboard')) {
     try {
@@ -52,6 +106,26 @@ const server = http.createServer(async (req, res) => {
       res.writeHead(500, { 'Content-Type': 'text/plain' });
       res.end(`Failed to load dashboard: ${err.message}`);
     }
+    return;
+  }
+
+  // SSE Stream Endpoint
+  if (req.method === 'GET' && req.url === '/api/events') {
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
+      'Access-Control-Allow-Origin': '*'
+    });
+    sseClients.push(res);
+    console.log(`📡 [Server] SSE Client connected. (Total: ${sseClients.length})`);
+    
+    req.on('close', () => {
+      sseClients = sseClients.filter(client => client !== res);
+      console.log(`📡 [Server] SSE Client disconnected. (Total: ${sseClients.length})`);
+    });
+
+    res.write(`event: ping\ndata: ${JSON.stringify({ time: Date.now() })}\n\n`);
     return;
   }
 
@@ -113,6 +187,58 @@ const server = http.createServer(async (req, res) => {
       driftStats,
       memoryCache
     }));
+    return;
+  }
+
+  // API Override Model Status
+  if (req.method === 'POST' && req.url === '/api/models/override-status') {
+    let body = '';
+    req.on('data', chunk => body += chunk.toString());
+    req.on('end', () => {
+      try {
+        const { provider, status } = JSON.parse(body);
+        if (!provider || !status) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: "Missing provider or status" }));
+          return;
+        }
+
+        const success = status === 'healthy';
+        heartbeatRegistry.record(provider, 0, success);
+        broadcastEvent('model-status-override', { provider, status });
+
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: true, message: `Model ${provider} status successfully overridden to ${status}!` }));
+      } catch (err) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: false, error: err.message }));
+      }
+    });
+    return;
+  }
+
+  // API Toggle / Reset Circuit Breaker
+  if (req.method === 'POST' && req.url === '/api/circuit-breaker/toggle') {
+    let body = '';
+    req.on('data', chunk => body += chunk.toString());
+    req.on('end', () => {
+      try {
+        const { action } = JSON.parse(body);
+        if (action === 'reset') {
+          tokenMonitor.totalSessionCost = 0;
+          broadcastEvent('circuit-breaker-reset', { totalSessionCost: 0 });
+          
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ success: true, message: "Circuit breaker session cost successfully reset!" }));
+        } else {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: "Invalid action. Supported: reset" }));
+        }
+      } catch (err) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: false, error: err.message }));
+      }
+    });
     return;
   }
 
