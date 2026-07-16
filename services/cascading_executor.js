@@ -134,9 +134,27 @@ class CascadingExecutor {
     const requiredModalities = detectRequiredModalities(context);
     console.log(`📡 [CascadingExecutor] Required modalities detected: [${requiredModalities.join(', ')}]`);
 
+    // 關鍵決策動態提權 (Critical Decision Escalation)
+    let activeTier = preferredTier;
+    const objectiveText = (context.objective || '').toLowerCase();
+    const tags = context.tags || [];
+    
+    // 大批次或純文字生成任務 (帶有 realtime 或 text-only 標籤) 免於提權，確保預算安全
+    const isTextOnlyTask = tags.includes('realtime') || tags.includes('text-only');
+    
+    if (!isTextOnlyTask) {
+      const criticalKeywords = ['delete', 'remove', 'rmdir', 'remove-item', '重構', '刪除', '清空', 'reconstruct', 'refactor', 'unlink'];
+      const isCritical = criticalKeywords.some(keyword => objectiveText.includes(keyword));
+      
+      if (isCritical && activeTier !== 'high' && activeTier !== 'ultra') {
+        console.log(`⚠️ [CascadingExecutor] Critical keywords detected in non-text-only task. Escalating preferredTier to 'high' for safety.`);
+        activeTier = 'high';
+      }
+    }
+
     const candidates = router.getCandidates({
       modalities: requiredModalities,
-      preferredTier: preferredTier
+      preferredTier: activeTier
     });
 
     console.log(`\n🛡️  [CascadingExecutor] Plan initialized with ${candidates.length} candidates.`);

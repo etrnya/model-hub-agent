@@ -68,11 +68,12 @@ class DualVerificationGate {
     // 2. Concise Audit Prompt: Focus only on mission-critical verification
     const promptObj = {
       task_id: "verify-" + (context.task_id || "gen"),
-      objective: "Verify the adherence to constraints for the following task output.",
+      objective: "Verify if the original task output is correct, complete, and adheres to the original task requirements. Do NOT confuse the schema of the output to verify (which is the output of the original task) with your own output schema (passed, violation_details, confidence).",
       original_task: context.objective,
       constraints: context.constraints,
+      original_task_expected_schema: context.schema ? JSON.stringify(context.schema) : "Any",
       output_to_verify: JSON.stringify(primaryResult),
-      instruction: "Analyze if the output violates any constraints. Be critical."
+      instruction: "Analyze if output_to_verify is a valid and correct response for original_task. Set 'passed' to true if it is correct. Set 'passed' to false and describe what is wrong in 'violation_details' if it is incorrect, incomplete, or violates constraints."
     };
 
     try {

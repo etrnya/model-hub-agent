@@ -10,7 +10,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
   <!-- Chart.js -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-  <!-- Tailwind CSS (for quick styling utility) -->
+  <!-- Tailwind CSS -->
   <script src="https://cdn.tailwindcss.com"></script>
   <script>
     tailwind.config = {
@@ -83,10 +83,10 @@
       <div>
         <div class="flex items-center gap-2">
           <span class="px-2 py-0.5 rounded bg-cyan-500/10 text-cyan-400 text-xs font-bold tracking-wide uppercase">Observability</span>
-          <span class="text-xs text-gray-500">v1.5.0</span>
+          <span class="text-xs text-gray-500">v2.0.0 (ECC Active)</span>
         </div>
         <h1 class="text-3xl font-extrabold tracking-tight text-white mt-1">Antigravity Agent OS 控制台</h1>
-        <p class="text-sm text-gray-400">本地多模型調度、心跳延遲、語意記憶快取與輸出漂移監控</p>
+        <p class="text-sm text-gray-400">並行競速調度、語意去重、安全防護指令沙盒與即時觀測控制台</p>
       </div>
       <div class="flex gap-3">
         <button onclick="fetchStats()" class="px-4 py-2.5 bg-cyan-600 text-white rounded-xl hover:bg-cyan-500 font-bold text-sm shadow-lg shadow-cyan-950 transition-all flex items-center gap-2">
@@ -113,10 +113,13 @@
         <div class="text-3xl font-black text-blue-400 mt-2" id="cache-hit-ratio">0%</div>
         <div class="text-xs text-gray-500 mt-1">相似度 >= 99.9% 實現 0 Token 繞過</div>
       </div>
-      <div class="glass-card p-5 flex flex-col justify-between">
-        <div class="text-xs text-gray-400 uppercase font-semibold tracking-wider">系統狀態</div>
-        <div class="text-3xl font-black mt-2 text-emerald-400" id="system-status-text">🟢 Online</div>
-        <div class="text-xs text-gray-500 mt-1">OCC Version: Standard Active</div>
+      <div class="glass-card p-5 flex flex-col justify-between border-red-500/20">
+        <div class="text-xs text-gray-400 uppercase font-semibold tracking-wider flex justify-between items-center">
+          <span>Session 總費用</span>
+          <button onclick="resetCircuitBreaker()" class="text-[10px] text-red-400 hover:text-red-300 border border-red-500/20 px-1.5 py-0.5 rounded hover:bg-red-500/10 transition-colors">重置</button>
+        </div>
+        <div class="text-2xl font-black mt-2 text-red-400" id="session-cost-text">$0.000000 USD</div>
+        <div class="text-[10px] text-gray-500 mt-1">單次任務上限: $0.05 | Session 上限: $0.50</div>
       </div>
     </div>
 
@@ -163,11 +166,12 @@
               <input type="text" id="task-constraints" class="glass-input px-3 py-2 text-xs" placeholder="CommonJS, 包含錯誤處理" />
             </div>
             <div class="flex flex-col gap-1">
-              <label class="text-xs font-bold text-gray-400">⚡ 模型等級 (Tier)</label>
+              <label class="text-xs font-bold text-gray-400">⚡ 執行模式 & 模型階級</label>
               <select id="task-tier" class="glass-input px-3 py-2 text-xs bg-transparent">
                 <option value="high" class="bg-gray-900">High-tier (預設)</option>
                 <option value="medium" class="bg-gray-900">Medium-tier</option>
                 <option value="base" class="bg-gray-900">Base-tier</option>
+                <option value="race" class="bg-gray-900">⚡ Parallel Racing (競速模式)</option>
               </select>
             </div>
           </div>
@@ -181,8 +185,8 @@
         </div>
 
         <div class="border-t border-gray-800/60 pt-4">
-          <div class="text-xs font-bold text-gray-400 mb-2">📥 任務執行結果</div>
-          <pre class="bg-black/60 rounded-xl p-4 text-[11px] font-mono overflow-auto max-h-60 text-emerald-400 border border-gray-800/40" id="dispatch-result">等待任務發送...</pre>
+          <div class="text-xs font-bold text-gray-400 mb-2">📥 任務即時日誌 (SSE Stream)</div>
+          <pre class="bg-black/60 rounded-xl p-4 text-[11px] font-mono overflow-auto h-60 text-emerald-400 border border-gray-800/40" id="dispatch-result">等待任務發送或即時事件中...</pre>
         </div>
       </div>
 
@@ -238,19 +242,20 @@
 
     <!-- Health table -->
     <div class="glass-card p-6">
-      <h3 class="text-lg font-bold text-white mb-4">API 端點健康與調度評級</h3>
+      <h3 class="text-lg font-bold text-white mb-4">API 端點健康與手動標記控制 (Heartbeat Controls)</h3>
       <div class="overflow-x-auto rounded-xl border border-gray-800/40">
         <table class="w-full text-left text-sm">
           <thead class="bg-white/5 text-gray-400 text-xs font-bold uppercase tracking-wider">
             <tr>
               <th class="px-6 py-3">供應商 (Provider)</th>
               <th class="px-6 py-3">心跳狀態 (Heartbeat)</th>
-              <th class="px-6 py-3 text-right">平均延遲 (Avg Latency)</th>
+              <th class="px-6 py-3">平均延遲 (Avg Latency)</th>
+              <th class="px-6 py-3 text-right">手動降級干預 (Override)</th>
             </tr>
           </thead>
           <tbody class="divide-y divide-gray-800/40" id="health-table-body">
             <tr>
-              <td colspan="3" class="px-6 py-4 text-center text-gray-500">健康狀態載入中...</td>
+              <td colspan="4" class="px-6 py-4 text-center text-gray-500">健康狀態載入中...</td>
             </tr>
           </tbody>
         </table>
@@ -263,6 +268,45 @@
     let latencyChart = null;
     let tokenChart = null;
     let driftChart = null;
+
+    // 1. Establish SSE Connection (Module 4)
+    const eventSource = new EventSource('/api/events');
+    const resultBlock = document.getElementById('dispatch-result');
+
+    eventSource.addEventListener('ping', () => {
+      console.log('📡 SSE connected.');
+    });
+
+    eventSource.addEventListener('task-status', (event) => {
+      const data = JSON.parse(event.data);
+      if (data.type === 'start') {
+        resultBlock.innerText = `\n🔄 [SSE ACTIVE] 任務啟動: "${data.objective}"\n正在評估路由與防護機制...\n`;
+      } else if (data.type === 'success') {
+        resultBlock.innerText = `\n🟢 [SSE SUCCESS] 任務順利完成！使用模型: ${data.modelUsed}\n` + resultBlock.innerText;
+        fetchStats();
+      }
+    });
+
+    eventSource.addEventListener('token-record', (event) => {
+      console.log('📡 SSE: Token monitor updated.');
+      fetchStats();
+    });
+
+    eventSource.addEventListener('circuit-breaker', (event) => {
+      const data = JSON.parse(event.data);
+      resultBlock.innerText = `\n🚨 [SSE ALERT] Circuit Breaker Tripped! \n原因: ${data.reason}\n` + resultBlock.innerText;
+      fetchStats();
+    });
+
+    eventSource.addEventListener('model-status-override', (event) => {
+      console.log('📡 SSE: Model override updated.');
+      fetchStats();
+    });
+
+    eventSource.addEventListener('circuit-breaker-reset', (event) => {
+      console.log('📡 SSE: Circuit Breaker cost reset.');
+      fetchStats();
+    });
 
     async function fetchStats() {
       const spinner = document.getElementById('refresh-spinner');
@@ -290,12 +334,21 @@
       const tokenSummary = data.tokensSummary || {};
       let totalSaved = 0;
       let totalUsed = 0;
+      let sessionCost = 0;
+
       Object.keys(tokenSummary).forEach(p => {
         totalSaved += tokenSummary[p]["省下 Token"] || 0;
         totalUsed += tokenSummary[p]["已用 Token"] || 0;
+        
+        const costStr = tokenSummary[p]["花費 (USD)"] || "$0.0";
+        const costVal = parseFloat(costStr.replace('$', ''));
+        sessionCost += costVal;
       });
       document.getElementById('saved-tokens-text').innerText = totalSaved.toLocaleString();
       document.getElementById('saved-tokens-desc').innerText = `已成功抵禦 ${totalSaved.toLocaleString()} 額外 Tokens`;
+
+      // Cost render
+      document.getElementById('session-cost-text').innerText = `$${sessionCost.toFixed(6)} USD`;
 
       // Cache hit ratio estimation
       const totalHistory = data.tokensHistory || [];
@@ -303,7 +356,7 @@
       const hitRatio = totalHistory.length > 0 ? ((cacheHits / totalHistory.length) * 100).toFixed(0) : '0';
       document.getElementById('cache-hit-ratio').innerText = `${hitRatio}%`;
 
-      // 2. Render health table
+      // 2. Render health table with Override buttons
       const healthBody = document.getElementById('health-table-body');
       healthBody.innerHTML = '';
       providers.forEach(p => {
@@ -317,7 +370,12 @@
         row.innerHTML = `
           <td class="px-6 py-4 font-bold text-white capitalize">${p}</td>
           <td class="px-6 py-4">${statusHTML}</td>
-          <td class="px-6 py-4 text-right font-mono text-cyan-400 font-bold">${healthData[p].avgLatency ? healthData[p].avgLatency.toFixed(0) + ' ms' : 'N/A'}</td>
+          <td class="px-6 py-4 font-mono text-cyan-400 font-bold">${healthData[p].avgLatency ? healthData[p].avgLatency.toFixed(0) + ' ms' : 'N/A'}</td>
+          <td class="px-6 py-4 text-right">
+            <button onclick="overrideModelStatus('${p}', '${isHealthy ? 'degraded' : 'healthy'}')" class="px-3 py-1 bg-white/5 border border-white/10 hover:bg-white/10 text-xs font-bold rounded-lg transition-colors text-gray-300">
+              ${isHealthy ? '⚠️ 標記降級' : '🟢 標記復原'}
+            </button>
+          </td>
         `;
         healthBody.appendChild(row);
       });
@@ -449,10 +507,9 @@
     async function dispatchCustomTask() {
       const objective = document.getElementById('task-objective').value.trim();
       const constraints = document.getElementById('task-constraints').value.split(',').map(s => s.trim()).filter(Boolean);
-      const tier = document.getElementById('task-tier').value;
+      const selectMode = document.getElementById('task-tier').value;
       const btn = document.getElementById('dispatch-btn');
       const spinner = document.getElementById('dispatch-spinner');
-      const resultBlock = document.getElementById('dispatch-result');
 
       if (!objective) {
         alert("請輸入任務目標！");
@@ -461,21 +518,30 @@
 
       btn.disabled = true;
       spinner.classList.remove('hidden');
-      resultBlock.innerText = "連線中，Agent OS 正在處理您的請求...";
+      resultBlock.innerText = `🔄 [Task Active] 正在呼叫本地調度器...\n`;
+
+      const payload = { 
+        objective, 
+        constraints, 
+        tier: selectMode === 'race' ? 'high' : selectMode 
+      };
+
+      // If racing mode is chosen, pass race options
+      const isRace = selectMode === 'race';
 
       try {
         const res = await fetch('/dispatch', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ objective, constraints, tier })
+          body: JSON.stringify({ 
+            ...payload, 
+            tags: isRace ? ["realtime"] : []
+          })
         });
         const data = await res.json();
-        resultBlock.innerText = JSON.stringify(data, null, 2);
-        
-        // Refresh stats
-        fetchStats();
+        resultBlock.innerText = JSON.stringify(data, null, 2) + "\n" + resultBlock.innerText;
       } catch (err) {
-        resultBlock.innerText = `執行出錯: ${err.message}`;
+        resultBlock.innerText = `執行出錯: ${err.message}\n` + resultBlock.innerText;
       } finally {
         btn.disabled = false;
         spinner.classList.add('hidden');
@@ -485,8 +551,7 @@
     async function runBenchmark() {
       if (!confirm("基準評測將調用外部 LLM 生成代碼並生成向量嵌入，可能耗時 10~20 秒，確定開始？")) return;
       
-      const resultBlock = document.getElementById('dispatch-result');
-      resultBlock.innerText = "⏱️ 正在執行基準評測，這將對多個模型進行 Latency 與 Drift 比對...";
+      resultBlock.innerText = "⏱️ 正在執行基準評測，這將對多個模型進行 Latency 與 Drift 比對...\n" + resultBlock.innerText;
       
       try {
         const res = await fetch('/api/benchmark', { method: 'POST' });
@@ -510,9 +575,39 @@
       }
     }
 
+    async function resetCircuitBreaker() {
+      if (!confirm("確定要手動重置 Session 總費用熔斷器嗎？")) return;
+      try {
+        const res = await fetch('/api/circuit-breaker/toggle', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'reset' })
+        });
+        const data = await res.json();
+        alert(data.message || "熔斷器費用已重置！");
+        fetchStats();
+      } catch (err) {
+        alert(`重置失敗: ${err.message}`);
+      }
+    }
+
+    async function overrideModelStatus(provider, status) {
+      try {
+        const res = await fetch('/api/models/override-status', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ provider, status })
+        });
+        const data = await res.json();
+        console.log(data.message);
+        fetchStats();
+      } catch (err) {
+        alert(`覆寫失敗: ${err.message}`);
+      }
+    }
+
     // Init load
     fetchStats();
-    setInterval(fetchStats, 30000); // refresh every 30s
   </script>
 </body>
 </html>
