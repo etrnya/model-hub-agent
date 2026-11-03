@@ -85,17 +85,68 @@ async function runAll() {
     return ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1';
   }
 
-  // 建立輕量測試 HTTP 伺服器
+  // 建立輕量測試 HTTP 伺服器 (實作與 server.js 嚴格相同的門禁與路由)
   testServer = http.createServer((req, res) => {
-    // Localhost Access Guard
-    if (req.url.startsWith('/api/tasks')) {
-      // 測試若帶有 mock-external 標頭，模擬外部非 loopback 訪問
-      if (req.headers['x-mock-external']) {
+    // 依據 mock 標頭模擬不同的底層 socket IP
+    let simulatedIp = req.socket && req.socket.remoteAddress;
+    if (req.headers['x-mock-ip']) {
+      simulatedIp = req.headers['x-mock-ip'];
+    }
+
+    function checkLoopback(request) {
+      return simulatedIp === '127.0.0.1' || simulatedIp === '::1' || simulatedIp === '::ffff:127.0.0.1';
+    }
+
+    // 1. GET /api/events (SSE)
+    if (req.method === 'GET' && req.url === '/api/events') {
+      if (!checkLoopback(req)) {
         res.writeHead(403, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: "Access to task data is restricted to localhost." }));
+        res.end(JSON.stringify({ error: "Access to event stream is restricted to localhost." }));
         return;
       }
-      if (!isLoopbackAddress(req)) {
+      res.writeHead(200, {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        'Connection': 'keep-alive'
+      });
+      res.write(`event: ping\ndata: {}\n\n`);
+      res.end();
+      return;
+    }
+
+    // 2. GET /api/stats
+    if (req.method === 'GET' && req.url === '/api/stats') {
+      if (!checkLoopback(req)) {
+        res.writeHead(403, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: "Access to statistics is restricted to localhost." }));
+        return;
+      }
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ status: "healthy", stats: [] }));
+      return;
+    }
+
+    // 3. POST /dispatch
+    if (req.method === 'POST' && req.url === '/dispatch') {
+      if (!checkLoopback(req)) {
+        res.writeHead(403, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: "Access to task dispatch is restricted to localhost." }));
+        return;
+      }
+      let body = '';
+      req.on('data', chunk => body += chunk.toString());
+      req.on('end', async () => {
+        const payload = JSON.parse(body);
+        const result = await taskManager.dispatchFn(payload, null, payload.tier || 'high');
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: true, data: result }));
+      });
+      return;
+    }
+
+    // 4. /api/tasks 路由群組
+    if (req.url.startsWith('/api/tasks')) {
+      if (!checkLoopback(req)) {
         res.writeHead(403, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: "Access to task data is restricted to localhost." }));
         return;
@@ -136,20 +187,6 @@ async function runAll() {
       }
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify(task));
-      return;
-    }
-
-    if (req.method === 'POST' && req.url === '/dispatch') {
-      // 模擬既有舊版同步派發
-      let body = '';
-      req.on('data', chunk => body += chunk.toString());
-      req.on('end', async () => {
-        const payload = JSON.parse(body);
-        // 同步直接執行，不經 TaskManager 隊列
-        const result = await taskManager.dispatchFn(payload, null, payload.tier || 'high');
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ success: true, data: result }));
-      });
       return;
     }
 
@@ -247,8 +284,8 @@ async function runAll() {
       assert.ok(found, 'Previously completed task must be queryable upon reconnection');
     });
 
-    // T16: Task ID 查詢安全性與 Localhost Access Guard
-    await runTestCase('T16', 'Task ID 404 & Localhost Guard: Rejects unknown ID with 404; non-localhost with 403', async () => {
+    // T16: Task ID 查詢安全性與全端點 Localhost Access Guard
+    await runTestCase('T16', 'Localhost Access Guard: Enforces 403 on all sensitive endpoints for external/spoofed IPs', async () => {
       // 1. 不存在的 ID -> 404
       const res404 = await makeHttpRequest({
         hostname: '127.0.0.1',
@@ -259,16 +296,115 @@ async function runAll() {
       assert.strictEqual(res404.statusCode, 404);
       assert.strictEqual(res404.json.error, 'TASK_NOT_FOUND');
 
-      // 2. 模擬非本機區域網路請求 (x-mock-external) -> 403 Forbidden
-      const res403 = await makeHttpRequest({
+      // 2. Loopback 位址白名單有效性驗證 (127.0.0.1, ::1, ::ffff:127.0.0.1)
+      const resIpv4 = await makeHttpRequest({
         hostname: '127.0.0.1',
         port: testPort,
         path: '/api/tasks',
         method: 'GET',
-        headers: { 'x-mock-external': 'true' }
+        headers: { 'x-mock-ip': '127.0.0.1' }
       });
-      assert.strictEqual(res403.statusCode, 403);
-      assert.strictEqual(res403.json.error.includes('restricted to localhost'), true);
+      assert.strictEqual(resIpv4.statusCode, 200, '127.0.0.1 must be accepted');
+
+      const resIpv6 = await makeHttpRequest({
+        hostname: '127.0.0.1',
+        port: testPort,
+        path: '/api/tasks',
+        method: 'GET',
+        headers: { 'x-mock-ip': '::1' }
+      });
+      assert.strictEqual(resIpv6.statusCode, 200, '::1 must be accepted');
+
+      const resMapped = await makeHttpRequest({
+        hostname: '127.0.0.1',
+        port: testPort,
+        path: '/api/tasks',
+        method: 'GET',
+        headers: { 'x-mock-ip': '::ffff:127.0.0.1' }
+      });
+      assert.strictEqual(resMapped.statusCode, 200, '::ffff:127.0.0.1 must be accepted');
+
+      // 3. LAN IPv4 (192.168.1.100) -> 403 Forbidden
+      const resLanV4 = await makeHttpRequest({
+        hostname: '127.0.0.1',
+        port: testPort,
+        path: '/api/tasks',
+        method: 'GET',
+        headers: { 'x-mock-ip': '192.168.1.100' }
+      });
+      assert.strictEqual(resLanV4.statusCode, 403);
+      assert.ok(resLanV4.json.error.includes('restricted to localhost'));
+
+      // 4. LAN IPv6 (fe80::1) -> 403 Forbidden
+      const resLanV6 = await makeHttpRequest({
+        hostname: '127.0.0.1',
+        port: testPort,
+        path: '/api/tasks',
+        method: 'GET',
+        headers: { 'x-mock-ip': 'fe80::1' }
+      });
+      assert.strictEqual(resLanV6.statusCode, 403);
+
+      // 5. 偽造 X-Forwarded-For 標頭防護 (外部 IP 帶 X-Forwarded-For: 127.0.0.1 仍必須被阻斷)
+      const resSpoof = await makeHttpRequest({
+        hostname: '127.0.0.1',
+        port: testPort,
+        path: '/api/tasks',
+        method: 'GET',
+        headers: {
+          'x-mock-ip': '10.0.0.5',
+          'X-Forwarded-For': '127.0.0.1',
+          'X-Real-IP': '127.0.0.1'
+        }
+      });
+      assert.strictEqual(resSpoof.statusCode, 403, 'Spoofed X-Forwarded-For header MUST NOT bypass localhost guard');
+
+      // 6. GET /api/events 外部請求被阻斷為 403，不建立 SSE
+      const resEventsExt = await makeHttpRequest({
+        hostname: '127.0.0.1',
+        port: testPort,
+        path: '/api/events',
+        method: 'GET',
+        headers: { 'x-mock-ip': '192.168.1.200' }
+      });
+      assert.strictEqual(resEventsExt.statusCode, 403);
+      assert.ok(resEventsExt.json.error.includes('restricted to localhost'));
+
+      // 7. POST /dispatch 外部請求被阻斷為 403，不呼叫 dispatchTask
+      const resDispatchExt = await makeHttpRequest({
+        hostname: '127.0.0.1',
+        port: testPort,
+        path: '/dispatch',
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-mock-ip': '192.168.1.200'
+        }
+      }, { objective: 'malicious external dispatch' });
+      assert.strictEqual(resDispatchExt.statusCode, 403);
+      assert.ok(resDispatchExt.json.error.includes('restricted to localhost'));
+
+      // 8. GET /api/stats 外部請求被阻斷為 403，不洩漏統計資料
+      const resStatsExt = await makeHttpRequest({
+        hostname: '127.0.0.1',
+        port: testPort,
+        path: '/api/stats',
+        method: 'GET',
+        headers: { 'x-mock-ip': '192.168.1.200' }
+      });
+      assert.strictEqual(resStatsExt.statusCode, 403);
+      assert.ok(resStatsExt.json.error.includes('restricted to localhost'));
+
+      // 9. 本機呼叫 GET /api/stats 正常 200
+      const resStatsLocal = await makeHttpRequest({
+        hostname: '127.0.0.1',
+        port: testPort,
+        path: '/api/stats',
+        method: 'GET',
+        headers: { 'x-mock-ip': '127.0.0.1' }
+      });
+      assert.strictEqual(resStatsLocal.statusCode, 200);
+      assert.strictEqual(resStatsLocal.json.status, 'healthy');
     });
 
     // T17: Dashboard XSS 防護審查

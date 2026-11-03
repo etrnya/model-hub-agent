@@ -120,6 +120,11 @@ const server = http.createServer(async (req, res) => {
 
   // SSE Stream Endpoint
   if (req.method === 'GET' && req.url === '/api/events') {
+    if (!isLoopbackAddress(req)) {
+      res.writeHead(403, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: "Access to event stream is restricted to localhost." }));
+      return;
+    }
     res.writeHead(200, {
       'Content-Type': 'text/event-stream',
       'Cache-Control': 'no-cache',
@@ -152,6 +157,11 @@ const server = http.createServer(async (req, res) => {
 
   // API Stats Endpoint (Serves Dashboard Data)
   if (req.method === 'GET' && req.url === '/api/stats') {
+    if (!isLoopbackAddress(req)) {
+      res.writeHead(403, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: "Access to statistics is restricted to localhost." }));
+      return;
+    }
     res.writeHead(200, { 'Content-Type': 'application/json' });
 
     // Load Drift Stats
@@ -351,6 +361,11 @@ const server = http.createServer(async (req, res) => {
 
   // Dispatch task endpoint
   if (req.method === 'POST' && req.url === '/dispatch') {
+    if (!isLoopbackAddress(req)) {
+      res.writeHead(403, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: "Access to task dispatch is restricted to localhost." }));
+      return;
+    }
     let body = '';
     req.on('data', chunk => {
       body += chunk.toString();
