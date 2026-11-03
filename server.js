@@ -7,6 +7,7 @@ const tokenMonitor = require('./observability/token_monitor');
 const memoryManager = require('./infrastructure/adapters/memory_manager');
 const benchmarkRunner = require('./tests/benchmark_runner');
 const roleManager = require('./services/role_manager');
+const taskManager = require('./services/task_manager');
 
 const PORT = process.env.AGENT_OS_PORT || 3000;
 
@@ -29,6 +30,13 @@ function broadcastEvent(eventType, eventData) {
 globalEmitter.on('task-status', (data) => broadcastEvent('task-status', data));
 globalEmitter.on('token-record', (data) => broadcastEvent('token-record', data));
 globalEmitter.on('circuit-breaker', (data) => broadcastEvent('circuit-breaker', data));
+globalEmitter.on('task-lifecycle', (data) => broadcastEvent('task-lifecycle', data));
+
+// 本機存取保護檢查 (Localhost-Only Access Guard)
+function isLoopbackAddress(req) {
+  const ip = req.socket && req.socket.remoteAddress;
+  return ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1';
+}
 
 // Default response schema if none provided by client
 const defaultSchema = {
@@ -195,6 +203,61 @@ const server = http.createServer(async (req, res) => {
   if (req.method === 'GET' && req.url === '/api/roles') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify(roleManager.listRoles()));
+    return;
+  }
+
+  // API Asynchronous Tasks List (GET /api/tasks)
+  if (req.method === 'GET' && req.url === '/api/tasks') {
+    if (!isLoopbackAddress(req)) {
+      res.writeHead(403, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: "Access to task data is restricted to localhost." }));
+      return;
+    }
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(taskManager.listTasks()));
+    return;
+  }
+
+  // API Single Task Retrieval (GET /api/tasks/:id)
+  if (req.method === 'GET' && req.url.startsWith('/api/tasks/')) {
+    if (!isLoopbackAddress(req)) {
+      res.writeHead(403, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: "Access to task data is restricted to localhost." }));
+      return;
+    }
+    const taskId = req.url.slice('/api/tasks/'.length).trim();
+    const task = taskManager.getTask(taskId);
+    if (!task) {
+      res.writeHead(404, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: "TASK_NOT_FOUND" }));
+      return;
+    }
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(task));
+    return;
+  }
+
+  // API Asynchronous Task Submission (POST /api/tasks)
+  if (req.method === 'POST' && req.url === '/api/tasks') {
+    if (!isLoopbackAddress(req)) {
+      res.writeHead(403, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: "Access to task data is restricted to localhost." }));
+      return;
+    }
+    let body = '';
+    req.on('data', chunk => body += chunk.toString());
+    req.on('end', () => {
+      try {
+        const payload = JSON.parse(body);
+        const result = taskManager.submitTask(payload);
+        res.writeHead(202, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: true, ...result }));
+      } catch (err) {
+        const statusCode = err.statusCode || 500;
+        res.writeHead(statusCode, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: false, error: err.message, type: err.type || 'TASK_SUBMISSION_ERROR' }));
+      }
+    });
     return;
   }
 

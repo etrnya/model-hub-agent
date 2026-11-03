@@ -176,17 +176,42 @@
             </div>
           </div>
           
-          <div class="flex justify-end pt-2">
-            <button onclick="dispatchCustomTask()" id="dispatch-btn" class="px-5 py-2 bg-blue-600 text-white rounded-xl hover:bg-blue-500 font-bold text-xs shadow-lg shadow-blue-950 transition-all flex items-center gap-2">
+          <div class="flex justify-end gap-2 pt-2">
+            <button onclick="submitAsyncTask()" id="async-btn" class="px-4 py-2 bg-purple-600 text-white rounded-xl hover:bg-purple-500 font-bold text-xs shadow-lg shadow-purple-950 transition-all flex items-center gap-1.5">
+              <span>⚡ 非同步派發 (POST /api/tasks)</span>
+            </button>
+            <button onclick="dispatchCustomTask()" id="dispatch-btn" class="px-4 py-2 bg-blue-600 text-white rounded-xl hover:bg-blue-500 font-bold text-xs shadow-lg shadow-blue-950 transition-all flex items-center gap-1.5">
               <svg class="w-3.5 h-3.5 animate-spin hidden" id="dispatch-spinner" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
-              發送任務
+              <span>同步派發 (/dispatch)</span>
             </button>
           </div>
         </div>
 
-        <div class="border-t border-gray-800/60 pt-4">
+        <div class="border-t border-gray-800/60 pt-3">
+          <div class="flex justify-between items-center mb-2">
+            <div class="text-xs font-bold text-gray-400">📋 最近任務清冊 (Task Store: In-Memory / Localhost)</div>
+            <button onclick="fetchTaskList()" class="text-[10px] text-cyan-400 hover:text-cyan-300">重新整理清單</button>
+          </div>
+          <div class="max-h-36 overflow-auto rounded-xl border border-gray-800/40 text-xs bg-black/40">
+            <table class="w-full text-left">
+              <thead class="bg-white/5 text-gray-400 text-[10px] font-bold uppercase tracking-wider">
+                <tr>
+                  <th class="px-3 py-1.5">Task ID</th>
+                  <th class="px-3 py-1.5">狀態</th>
+                  <th class="px-3 py-1.5">目標 (Objective)</th>
+                  <th class="px-3 py-1.5 text-right">耗時</th>
+                </tr>
+              </thead>
+              <tbody class="divide-y divide-gray-800/40 text-gray-300" id="task-table-body">
+                <tr><td colspan="4" class="px-3 py-2 text-gray-500 text-center">無執行中或歷史任務</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="border-t border-gray-800/60 pt-3">
           <div class="text-xs font-bold text-gray-400 mb-2">📥 任務即時日誌 (SSE Stream)</div>
-          <pre class="bg-black/60 rounded-xl p-4 text-[11px] font-mono overflow-auto h-60 text-emerald-400 border border-gray-800/40" id="dispatch-result">等待任務發送或即時事件中...</pre>
+          <pre class="bg-black/60 rounded-xl p-4 text-[11px] font-mono overflow-auto h-48 text-emerald-400 border border-gray-800/40" id="dispatch-result">等待任務發送或即時事件中...</pre>
         </div>
       </div>
 
@@ -306,6 +331,22 @@
     eventSource.addEventListener('circuit-breaker-reset', (event) => {
       console.log('📡 SSE: Circuit Breaker cost reset.');
       fetchStats();
+    });
+
+    // 任務生命週期事件 (P1-B 任務級關聯)
+    eventSource.addEventListener('task-lifecycle', (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        const timeStr = new Date(data.timestamp || Date.now()).toLocaleTimeString();
+        let logLine = `\n⚡ [LIFECYCLE] [${data.status}] ${data.taskId} (${data.type}) - ${timeStr}`;
+        if (data.error) {
+          logLine += `\n   ❌ [${data.error.type}] ${data.error.message}`;
+        }
+        resultBlock.textContent = logLine + "\n" + resultBlock.textContent;
+        fetchTaskList();
+      } catch (e) {
+        console.error("Lifecycle event parsing failed:", e);
+      }
     });
 
     async function fetchStats() {
@@ -548,6 +589,119 @@
       }
     }
 
+    async function submitAsyncTask() {
+      const objective = document.getElementById('task-objective').value.trim();
+      const constraints = document.getElementById('task-constraints').value.split(',').map(s => s.trim()).filter(Boolean);
+      const selectMode = document.getElementById('task-tier').value;
+      const asyncBtn = document.getElementById('async-btn');
+
+      if (!objective) {
+        alert("請輸入任務目標！");
+        return;
+      }
+
+      asyncBtn.disabled = true;
+      try {
+        const payload = {
+          objective,
+          constraints,
+          tier: selectMode === 'race' ? 'high' : selectMode
+        };
+
+        const res = await fetch('/api/tasks', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+
+        const data = await res.json();
+        if (res.status === 202) {
+          resultBlock.textContent = `⚡ [HTTP 202 ACCEPTED] 任務已成功排入背景隊列！\nTask ID: ${data.taskId}\n狀態: ${data.status}\n` + resultBlock.textContent;
+          fetchTaskList();
+        } else {
+          resultBlock.textContent = `❌ [HTTP ${res.status}] 提交失敗: ${data.error || 'Unknown error'}\n` + resultBlock.textContent;
+        }
+      } catch (err) {
+        resultBlock.textContent = `提交失敗: ${err.message}\n` + resultBlock.textContent;
+      } finally {
+        asyncBtn.disabled = false;
+      }
+    }
+
+    async function fetchTaskList() {
+      try {
+        const res = await fetch('/api/tasks');
+        if (!res.ok) return;
+        const tasks = await res.json();
+        const tbody = document.getElementById('task-table-body');
+        if (!tbody) return;
+
+        // 安全清空並使用 textContent 重新填充
+        tbody.textContent = '';
+
+        if (!tasks || tasks.length === 0) {
+          const tr = document.createElement('tr');
+          const td = document.createElement('td');
+          td.colSpan = 4;
+          td.className = 'px-3 py-2 text-gray-500 text-center';
+          td.textContent = '無執行中或歷史任務';
+          tr.appendChild(td);
+          tbody.appendChild(tr);
+          return;
+        }
+
+        tasks.slice(0, 15).forEach(t => {
+          const tr = document.createElement('tr');
+          tr.className = 'hover:bg-white/5 cursor-pointer transition-colors';
+          tr.onclick = () => loadTaskDetail(t.taskId);
+
+          const tdId = document.createElement('td');
+          tdId.className = 'px-3 py-1.5 font-mono text-[10px] text-cyan-400';
+          tdId.textContent = t.taskId.length > 20 ? t.taskId.slice(0, 18) + '...' : t.taskId;
+
+          const tdStatus = document.createElement('td');
+          tdStatus.className = 'px-3 py-1.5';
+          const spanStatus = document.createElement('span');
+          spanStatus.className = 'px-1.5 py-0.5 rounded text-[10px] font-bold ' + 
+            (t.status === 'COMPLETED' ? 'bg-emerald-500/20 text-emerald-400' :
+             t.status === 'RUNNING' ? 'bg-blue-500/20 text-blue-400 animate-pulse' :
+             t.status === 'FAILED' ? 'bg-red-500/20 text-red-400' : 'bg-gray-500/20 text-gray-400');
+          spanStatus.textContent = t.status;
+          tdStatus.appendChild(spanStatus);
+
+          const tdObj = document.createElement('td');
+          tdObj.className = 'px-3 py-1.5 truncate max-w-[200px] text-gray-300';
+          tdObj.textContent = t.objective;
+
+          const tdDuration = document.createElement('td');
+          tdDuration.className = 'px-3 py-1.5 text-right font-mono text-[10px] text-gray-400';
+          tdDuration.textContent = t.durationMs !== null ? `${t.durationMs}ms` : '--';
+
+          tr.appendChild(tdId);
+          tr.appendChild(tdStatus);
+          tr.appendChild(tdObj);
+          tr.appendChild(tdDuration);
+          tbody.appendChild(tr);
+        });
+      } catch (err) {
+        console.warn('Failed to fetch task list:', err.message);
+      }
+    }
+
+    async function loadTaskDetail(taskId) {
+      try {
+        const res = await fetch(`/api/tasks/${encodeURIComponent(taskId)}`);
+        if (!res.ok) return;
+        const task = await res.json();
+        resultBlock.textContent = `📋 [TASK DETAIL: ${task.taskId}]\n狀態: ${task.status}\n耗時: ${task.durationMs || '--'}ms\n` +
+          (task.data ? `\n✨ [產出結果]:\n${JSON.stringify(task.data, null, 2)}\n` : '') +
+          (task.error ? `\n❌ [錯誤摘要]:\n${JSON.stringify(task.error, null, 2)}\n` : '') +
+          "\n" + resultBlock.textContent;
+      } catch (err) {
+        console.warn('Failed to load task detail:', err.message);
+      }
+    }
+
     async function runBenchmark() {
       if (!confirm("基準評測將調用外部 LLM 生成代碼並生成向量嵌入，可能耗時 10~20 秒，確定開始？")) return;
       
@@ -608,6 +762,7 @@
 
     // Init load
     fetchStats();
+    fetchTaskList();
   </script>
 </body>
 </html>
