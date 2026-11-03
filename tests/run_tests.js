@@ -32,7 +32,9 @@ const OFFLINE_SUITES = [
   'test_global_state.js',
   'test_error_taxonomy.js',
   'test_router_health_state_machine.js',
-  'test_router_cascading_integration.js'
+  'test_router_cascading_integration.js',
+  'test_role_manager.js',
+  'test_role_integration.js'
 ];
 
 // 2. 外部依賴整合測試清單 (External Integration & Provider Diagnostics)

@@ -6,6 +6,7 @@ const heartbeatRegistry = require('./registry/heartbeat_registry');
 const tokenMonitor = require('./observability/token_monitor');
 const memoryManager = require('./infrastructure/adapters/memory_manager');
 const benchmarkRunner = require('./tests/benchmark_runner');
+const roleManager = require('./services/role_manager');
 
 const PORT = process.env.AGENT_OS_PORT || 3000;
 
@@ -190,6 +191,13 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  // API Roles List
+  if (req.method === 'GET' && req.url === '/api/roles') {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(roleManager.listRoles()));
+    return;
+  }
+
   // API Override Model Status
   if (req.method === 'POST' && req.url === '/api/models/override-status') {
     let body = '';
@@ -288,21 +296,53 @@ const server = http.createServer(async (req, res) => {
     req.on('end', async () => {
       try {
         const payload = JSON.parse(body);
-        const { objective, constraints = [], tags = [], tier = 'high', schema } = payload;
+        let taskPayload;
+        let targetSchema;
+        let resolvedTier;
 
-        if (!objective) {
-          res.writeHead(400, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ error: "Missing required 'objective' field in request body." }));
-          return;
+        if (Object.hasOwn(payload, 'role')) {
+          const roleId = payload.role;
+          if (!roleId || typeof roleId !== 'string') {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: "Invalid 'role' parameter: must be a non-empty string." }));
+            return;
+          }
+
+          if (Object.hasOwn(payload, 'schema')) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: "Custom schema cannot be provided when a role is selected." }));
+            return;
+          }
+
+          try {
+            const roleBuilt = roleManager.buildTask(roleId, payload);
+            taskPayload = roleBuilt.taskPayload;
+            targetSchema = roleBuilt.outputSchema;
+            resolvedTier = roleBuilt.tier;
+          } catch (roleErr) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: roleErr.message }));
+            return;
+          }
+        } else {
+          // 既有舊格式 (100% 向下相容)
+          const { objective, constraints = [], tags = [], tier = 'high', schema } = payload;
+
+          if (!objective) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: "Missing required 'objective' field in request body." }));
+            return;
+          }
+
+          taskPayload = { objective, constraints, tags, code_context: payload.code_context };
+          targetSchema = schema || defaultSchema;
+          resolvedTier = tier;
         }
 
-        const taskPayload = { objective, constraints, tags, code_context: payload.code_context };
-        const targetSchema = schema || defaultSchema;
-
-        console.log(`\n🕸️  [Agent OS Server] Dispatching task via API: "${objective.slice(0, 60)}..."`);
+        console.log(`\n🕸️  [Agent OS Server] Dispatching task via API: "${taskPayload.objective.slice(0, 60)}..."`);
         
         // Execute task
-        const result = await dispatchTask(taskPayload, targetSchema, tier);
+        const result = await dispatchTask(taskPayload, targetSchema, resolvedTier);
 
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ success: true, data: result }));
