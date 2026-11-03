@@ -54,6 +54,15 @@ async function dispatchTask(taskPayload, outputSchema, tier = "base") {
       preferredTier: tier
     });
 
+    // Defense in Depth 契約檢查：未通過驗證或缺漏資料者嚴禁更新 GlobalState
+    if (!executionResult || executionResult.success !== true) {
+      throw new Error("Execution rejected: no verified result available.");
+    }
+
+    if (executionResult.data === undefined || executionResult.data === null) {
+      throw new Error("Execution rejected: result data is missing.");
+    }
+
     const primaryResult = executionResult.data;
     const capability = executionResult.modelUsed;
     

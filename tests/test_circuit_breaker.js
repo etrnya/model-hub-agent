@@ -29,16 +29,17 @@ async function runTest() {
   console.log("🧪 Testing Budget Guard & Circuit Breaker...");
   console.log("====================================================");
 
-  // Set exceptionally low budget to force tripping the breaker
-  process.env.MAX_TASK_BUDGET_TOKENS = "1000";
+  // Set exceptionally low budget to force tripping the breaker deterministically
+  process.env.MAX_TASK_BUDGET_TOKENS = "100";
 
   // Override cascadingExecutor's clientMap with our mock clients
   cascadingExecutor.clientMap = mockClientMap;
 
   const mockContext = {
-    objective: "Verify that the Circuit Breaker trips immediately when the token count goes beyond 1000 tokens.",
+    objective: `Verify that the Circuit Breaker trips immediately when token count exceeds budget: ${Date.now()}`,
     constraints: [],
-    tags: ["testing", "circuit-breaker"]
+    tags: ["testing", "circuit-breaker"],
+    code_context: "// Offline mock context"
   };
 
   const schema = {

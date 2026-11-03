@@ -5,6 +5,7 @@ const GeminiClient = require('../infrastructure/clients/gemini_client');
 const DeepSeekClient = require('../infrastructure/clients/deepseek_client');
 const VertexAIClient = require('../infrastructure/clients/vertex_ai_client');
 const CodeGraphAdapter = require('../infrastructure/adapters/codegraph_adapter');
+const verificationGate = require('./verification_gate');
 const codegraph = new CodeGraphAdapter();
 
 /**
@@ -66,12 +67,41 @@ class CascadingExecutor {
    * @param {Object} options - { preferredTier: 'high', maxRetries: 3 }
    */
   async execute(context, schema, options = {}) {
-    const { preferredTier = 'high', maxRetries = 3 } = options;
+    const { preferredTier = 'high', maxRetries = 10, taskTimeoutMs = options.timeoutMs || 45000 } = options;
+    const taskStartMonotonic = performance.now();
+    const taskDeadlineMonotonic = taskStartMonotonic + taskTimeoutMs;
     const globalEmitter = require('../shared/global_emitter');
     globalEmitter.emit('task-status', { type: 'start', objective: context.objective });
 
+    // 0. Deterministic Semantic Cache Check (0 Token / Instant Bypass)
+    const SemanticCache = require('./semantic_cache');
+    const semanticCache = new SemanticCache();
+    const cachedSemantic = semanticCache.get(context, schema);
+    if (cachedSemantic.hit) {
+      console.log(`✨ [CascadingExecutor] Bypassed LLM execution by 100% Deterministic Semantic Cache.`);
+      Object.assign(context, cachedSemantic.data);
+      const tokenMonitor = require('../observability/token_monitor');
+      tokenMonitor.record('semantic-cache', 0, 0, 0);
+      globalEmitter.emit('task-status', { type: 'success', objective: context.objective, modelUsed: 'semantic-cache-bypass' });
+      return {
+        success: true,
+        data: cachedSemantic.data,
+        modelUsed: {
+          model_id: 'semantic-cache-bypass',
+          provider: 'semantic-cache',
+          tier: 'ultra-fast',
+          context_window: 1000000,
+          max_output_tokens: 1000000,
+          cost_per_1k_input: 0,
+          cost_per_1k_output: 0
+        },
+        attempts: 1
+      };
+    }
+
     const memoryManager = require('../infrastructure/adapters/memory_manager');
     const threshold = parseFloat(process.env.MEMORY_SIMILARITY_THRESHOLD || '0.90');
+
     const cachedMemory = await memoryManager.searchMemory(context.objective, threshold);
     if (cachedMemory) {
       let isMemoryValid = true;
@@ -106,7 +136,7 @@ class CascadingExecutor {
           attempts: 1
         };
       } else {
-        console.log(`🔄 [CascadingExecutor] Memory audit failed. Proceeding to normal LLM execution...`);
+        console.log(`🔄 [CascadingExecutor] Memory audit rejected. Cached memory discarded; proceeding to clean LLM execution...`);
       }
     }
 
@@ -175,11 +205,41 @@ class CascadingExecutor {
     if (isRacing && candidates.length >= 2) {
       console.log(`⚡ [CascadingExecutor] Parallel Racing enabled! Racing top 2 candidates: ${candidates[0].model_id} vs ${candidates[1].model_id}`);
       
-      const runCandidate = async (capability) => {
+      const raceRemaining = taskDeadlineMonotonic - performance.now();
+      if (raceRemaining <= 0) {
+        const errorMapper = require('../infrastructure/adapters/error_mapper');
+        throw errorMapper.createCascadingError({
+          type: 'HUB_TASK_TIMEOUT_EXCEEDED',
+          message: `Global Task Timeout Exceeded before racing started`,
+          statusCode: 504,
+          status: 504,
+          attempts: 0
+        });
+      }
+
+      const controller0 = new AbortController();
+      const controller1 = new AbortController();
+      let winnerDeclared = false;
+
+      const runCandidate = async (capability, myController, otherController) => {
+        // Admission Gate
+        const admission = heartbeatRegistry.canPass(capability.provider, capability.model_id);
+        if (!admission.allowed) {
+          throw new Error(`[Admission] Blocked for ${capability.model_id}: ${admission.reason || 'Circuit Open'}`);
+        }
+        const canaryToken = admission.token || null;
+        const canaryTokens = admission.tokens || null;
+
         const ClientClass = this.clientMap[capability.provider];
+        if (!ClientClass) {
+          throw new Error(`No client implemented for provider: ${capability.provider}`);
+        }
+
         const client = new ClientClass({ 
           modelCapability: capability,
-          promptMapping: { tool_call_template: "Return ONLY a valid JSON object strictly matching the schema." }
+          promptMapping: { tool_call_template: "Return ONLY a valid JSON object strictly matching the schema." },
+          canaryToken,
+          canaryTokens
         });
         
         // 1. Scan Input
@@ -187,9 +247,17 @@ class CascadingExecutor {
         if (!inputScan.safe) {
           throw new Error(`[AgentShield] Input blocked: ${inputScan.reason}`);
         }
+
+        const candidateRemaining = Math.max(1, Math.round(taskDeadlineMonotonic - performance.now()));
+        const clampedTimeout = Math.min(capability.timeout_ms || 30000, candidateRemaining);
         
-        // 2. Execute
-        const result = await client.execute(processedContext, schema);
+        // 2. Execute with signal & clamped timeout
+        const result = await client.execute(processedContext, schema, {
+          canaryToken,
+          canaryTokens,
+          signal: myController.signal,
+          timeoutMs: clampedTimeout
+        });
         
         // 3. Scan Output
         const outputScan = await guardrail.scan(result);
@@ -211,18 +279,33 @@ class CascadingExecutor {
           throw new Error(`[Verification] Audit failed: ${verification.reason}`);
         }
         
-        return { result, capability };
+        return { result, capability, otherController };
       };
+
+      let racingDeadlineTimer = null;
+      const remainingForRacing = Math.max(0, Math.round(taskDeadlineMonotonic - performance.now()));
+      if (remainingForRacing > 0) {
+        racingDeadlineTimer = setTimeout(() => {
+          if (!winnerDeclared) {
+            if (!controller0.signal.aborted) controller0.abort('TASK_DEADLINE');
+            if (!controller1.signal.aborted) controller1.abort('TASK_DEADLINE');
+          }
+        }, remainingForRacing);
+      }
 
       try {
         const winner = await Promise.any([
-          runCandidate(candidates[0]),
-          runCandidate(candidates[1])
+          runCandidate(candidates[0], controller0, controller1),
+          runCandidate(candidates[1], controller1, controller0)
         ]);
+
+        winnerDeclared = true;
+        // Broadcast cancel to loser
+        winner.otherController.abort('RACING_LOST');
         
         console.log(`🏆 [CascadingExecutor] Parallel Racing winner: ${winner.capability.model_id}!`);
         
-        // 記錄與儲存記憶
+        // Record and save memory (ONLY for the declared winner)
         const inputTokens = JSON.stringify(processedContext).length / 4;
         const outputTokens = JSON.stringify(winner.result).length / 4;
         tokenMonitor.record(winner.capability, inputTokens, inputTokens, outputTokens);
@@ -237,15 +320,56 @@ class CascadingExecutor {
         };
       } catch (err) {
         console.warn(`⚠️  [CascadingExecutor] Parallel Racing failed or all candidates rejected. Fallback to serial execution. Error: ${err.message}`);
+        if (!controller0.signal.aborted) controller0.abort('RACING_LOST');
+        if (!controller1.signal.aborted) controller1.abort('RACING_LOST');
+      } finally {
+        if (racingDeadlineTimer) clearTimeout(racingDeadlineTimer);
       }
     }
 
     // 3. Loop through candidates until success (Serial Fallback)
+    const cascadingSummary = [];
+    const allRejectionReasons = [];
+
     for (const capability of candidates) {
       if (attempts >= maxRetries && attempts > 0) break;
+
+      const remainingMs = taskDeadlineMonotonic - performance.now();
+      if (remainingMs <= 0) {
+        console.warn(`[CascadingExecutor] Global task deadline exceeded (${taskTimeoutMs}ms). Halting cascading.`);
+        const errorMapper = require('../infrastructure/adapters/error_mapper');
+        throw errorMapper.createCascadingError({
+          type: 'HUB_TASK_TIMEOUT_EXCEEDED',
+          message: `Global Task Timeout Exceeded (${taskTimeoutMs}ms budget exhausted)`,
+          statusCode: 504,
+          status: 504,
+          attempts: attempts,
+          cascadingSummary: cascadingSummary
+        });
+      }
+
+      // Admission Gate: Check circuit breaker state and acquire Canary Probe Token if HALF-OPEN
+      const admission = heartbeatRegistry.canPass(capability.provider, capability.model_id);
+      if (!admission.allowed) {
+        console.warn(`[CascadingExecutor] 🛑 Admission rejected for ${capability.model_id} (${capability.provider}): ${admission.reason || 'Circuit Open'}. Cascading to next candidate.`);
+        allRejectionReasons.push({
+          model_id: capability.model_id,
+          provider: capability.provider,
+          reason: admission.reason || 'Circuit Open',
+          statusCode: 503
+        });
+        continue;
+      }
+      const canaryToken = admission.token || null;
+      const canaryTokens = admission.tokens || null;
       
       attempts++;
       console.log(`\n🚀 [Attempt ${attempts}] Trying ${capability.model_id} (${capability.provider})...`);
+
+      const currentLoopRemaining = Math.max(1, Math.round(taskDeadlineMonotonic - performance.now()));
+      const clientDefaultTimeout = capability.timeout_ms || 30000;
+      const clampedTimeoutMs = Math.min(clientDefaultTimeout, currentLoopRemaining);
+      const attemptAbortController = new AbortController();
 
       try {
         const ClientClass = this.clientMap[capability.provider];
@@ -255,7 +379,9 @@ class CascadingExecutor {
 
         const client = new ClientClass({ 
           modelCapability: capability,
-          promptMapping: { tool_call_template: "Return ONLY a valid JSON object strictly matching the schema." }
+          promptMapping: { tool_call_template: "Return ONLY a valid JSON object strictly matching the schema." },
+          canaryToken,
+          canaryTokens
         });
 
         // Run AgentShield Input Scan
@@ -265,7 +391,12 @@ class CascadingExecutor {
         }
 
         // 3. Run execution
-        let result = await client.execute(processedContext, schema);
+        let result = await client.execute(processedContext, schema, {
+          canaryToken,
+          canaryTokens,
+          signal: attemptAbortController.signal,
+          timeoutMs: clampedTimeoutMs
+        });
         
         // Run AgentShield Output Scan
         const outputScan = await guardrail.scan(result);
@@ -323,6 +454,13 @@ class CascadingExecutor {
         let verification = await verificationGate.verify(result, auditContext, clientFactory);
 
         if (!verification.success) {
+          // If the verification failure is due to infrastructure error (not model content error),
+          // DO NOT waste tokens attempting self-correction on the model. Halt immediately and cascade!
+          if (verification.errorType === 'VERIFICATION_INFRASTRUCTURE_ERROR') {
+            console.error(`🛑 [CascadingExecutor] Verification infrastructure error: ${verification.reason}. Halting self-correction loop.`);
+            throw new Error(`[VerificationInfrastructure] ${verification.reason}`);
+          }
+
           console.log(`🔄 [CascadingExecutor] Verification failed for ${capability.model_id}. Initiating Self-Correction Loop...`);
           
           const initialFailedOutput = result;
@@ -402,6 +540,9 @@ class CascadingExecutor {
                 
                 result = correctedResult;
                 correctionSuccess = true;
+              } else if (reVerification.errorType === 'VERIFICATION_INFRASTRUCTURE_ERROR') {
+                console.error(`🛑 [CascadingExecutor] Verification infrastructure error during self-correction: ${reVerification.reason}. Halting loop.`);
+                throw new Error(`[VerificationInfrastructure] ${reVerification.reason}`);
               } else {
                 console.warn(`⚠️  [CascadingExecutor] Self-Correction failed validation: ${reVerification.reason}`);
                 lastResult = correctedResult;
@@ -410,7 +551,7 @@ class CascadingExecutor {
             } catch (err) {
               console.error(`❌ [CascadingExecutor] Error during self-correction: ${err.message}`);
               lastReason = err.message;
-              if (err.message.includes('[CircuitBreaker]')) {
+              if (err.message.includes('[CircuitBreaker]') || err.message.includes('[VerificationInfrastructure]')) {
                 throw err;
               }
             }
@@ -429,8 +570,9 @@ class CascadingExecutor {
         tokenMonitor.record(capability, inputTokens, inputTokens, outputTokens);
         globalEmitter.emit('task-status', { type: 'success', objective: context.objective, modelUsed: capability.model_id });
 
-        // Phase 3: Save successful task execution to memory
+        // Phase 3: Save successful task execution to memory & semantic cache
         await memoryManager.saveMemory(context.objective, result);
+        semanticCache.set(context, schema, result);
 
         return {
           success: true,
@@ -443,11 +585,27 @@ class CascadingExecutor {
         lastError = error;
         console.error(`⚠️  [CascadingExecutor] Failed with ${capability.model_id}: ${error.message}`);
         
-        // Mark as degraded in heartbeat to avoid immediate reuse by other components
-        heartbeatRegistry.record(capability.provider, 0, false);
+        cascadingSummary.push({
+          modelId: capability.model_id,
+          provider: capability.provider,
+          statusCode: error.status || error.statusCode || 500,
+          type: error.type || 'HUB_UNKNOWN_ERROR',
+          message: error.message
+        });
+
+        // Mark as degraded in heartbeat ONLY if not already recorded inside BaseClient
+        // This avoids duplicate probe settlement/recording
+        if (!error.recordedInClient && error.type !== 'HUB_OPERATION_CANCELLED') {
+          heartbeatRegistry.record(
+            { provider: capability.provider, modelId: capability.model_id },
+            0,
+            false,
+            { error, token: canaryToken || null, tokens: canaryTokens || null }
+          );
+        }
         
         // Circuit Breaker abort check
-        if (error.message.includes('[CircuitBreaker]')) {
+        if (error.message && error.message.includes('[CircuitBreaker]')) {
           console.error(`🛑 [CascadingExecutor] Circuit Breaker tripped. Halting execution!`);
           globalEmitter.emit('circuit-breaker', { type: 'tripped', reason: error.message });
           throw error;
@@ -458,7 +616,87 @@ class CascadingExecutor {
       }
     }
 
-    throw new Error(`[CascadingExecutor] All ${attempts} candidates failed. Last error: ${lastError.message}`);
+    // All candidates failed or none admitted. Determine structured terminal error:
+    const errorMapper = require('../infrastructure/adapters/error_mapper');
+
+    // Case 1: Deadline expired during execution
+    if (performance.now() >= taskDeadlineMonotonic) {
+      throw errorMapper.createCascadingError({
+        type: 'HUB_TASK_TIMEOUT_EXCEEDED',
+        message: `Global Task Timeout Exceeded (${taskTimeoutMs}ms budget exhausted)`,
+        statusCode: 504,
+        status: 504,
+        attempts: attempts,
+        cascadingSummary: cascadingSummary
+      });
+    }
+
+    // Case 2: All candidates were rejected at Admission Gate due to Circuit OPEN (attempts === 0)
+    if (attempts === 0) {
+      if (candidates.length === 0) {
+        const modelRegistry = require('../registry/model_registry');
+        const quotaGuard = require('../infrastructure/adapters/quota_guard');
+        const capableModels = modelRegistry.getModelsByCapability(requiredModalities)
+          .filter(m => m.context_window >= (context.minContext || 0));
+
+        if (capableModels.length === 0) {
+          throw errorMapper.createCascadingError({
+            type: 'HUB_MODEL_NOT_FOUND',
+            message: 'No candidate models available matching required capabilities',
+            statusCode: 404,
+            status: 404,
+            attempts: 0,
+            cascadingSummary: []
+          });
+        }
+
+        const allQuotaExceeded = capableModels.every(m => !quotaGuard.canProceed(m.provider, m.limits));
+        if (allQuotaExceeded) {
+          throw errorMapper.createCascadingError({
+            type: 'HUB_RATE_LIMIT',
+            message: 'All candidate models exceeded quota limits',
+            statusCode: 429,
+            status: 429,
+            attempts: 0,
+            cascadingSummary: []
+          });
+        }
+      }
+
+      // If candidates exist but all were rejected by canPass(), calculate minRetryAfterMs
+      let minRetryAfterMs = null;
+      const now = Date.now();
+      for (const c of candidates) {
+        const node = heartbeatRegistry.getNode(`${c.provider}:${c.model_id}`);
+        if (node && node.state === 'OPEN' && !node.permanent && node.notBefore && node.notBefore > now) {
+          const remaining = node.notBefore - now;
+          if (minRetryAfterMs === null || remaining < minRetryAfterMs) {
+            minRetryAfterMs = remaining;
+          }
+        }
+      }
+
+      throw errorMapper.createCascadingError({
+        type: 'HUB_ALL_CANDIDATES_CIRCUIT_OPEN',
+        message: 'All candidate models are currently in circuit OPEN state',
+        statusCode: 503,
+        status: 503,
+        attempts: 0,
+        retryAfterMs: minRetryAfterMs,
+        cascadingSummary: allRejectionReasons
+      });
+    }
+
+    // Case 3: Candidates were attempted, but all failed (mixed or uniform cascading failure)
+    throw errorMapper.createCascadingError({
+      type: 'HUB_CASCADING_FAILED',
+      message: `Cascading execution failed across all ${attempts} attempted candidates: ${lastError ? lastError.message : 'Unknown error'}`,
+      statusCode: 502,
+      status: 502,
+      attempts: attempts,
+      cascadingSummary: cascadingSummary,
+      cause: lastError
+    });
   }
 }
 

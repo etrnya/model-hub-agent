@@ -11,8 +11,59 @@ class CapabilityAwareRouter {
    * @param {Object} requirements - { modalities: [], minContext: number, preferredTier: string }
    * @returns {Object} Selected ModelCapabilitySchema
    */
+  /**
+   * Calculates a task complexity score to determine optimal model tier.
+   * @param {Object} context 
+   * @returns {string} 'low' | 'medium' | 'high' | 'ultra'
+   */
+  calculateComplexityScore(context = {}) {
+    const text = ((context.objective || '') + ' ' + (context.constraints || []).join(' ')).toLowerCase();
+    const len = text.length;
+
+    const highComplexityKeywords = ['architecture', 'refactor', 'security', 'audit', 'database', 'qdrant', 'compiler', 'benchmark', 'ast', 'concurrency', 'deadlock'];
+    const lowComplexityKeywords = ['greeting', 'format', 'schema', 'hello', 'cleanup', 'simple', 'trim', 'parse', 'ping'];
+
+    const hasHighKeywords = highComplexityKeywords.some(k => text.includes(k));
+    const hasLowKeywords = lowComplexityKeywords.some(k => text.includes(k));
+
+    if (hasHighKeywords || len > 1500) {
+      console.log(`[Router] 🧠 Adaptive Routing: High Complexity Task detected (len: ${len}, keywords match). Routing to High/Ultra tier.`);
+      return 'high';
+    } else if (hasLowKeywords && len < 300) {
+      console.log(`[Router] ⚡ Adaptive Routing: Low Complexity Task detected (len: ${len}). Routing to Fast/Low tier.`);
+      return 'medium';
+    }
+
+    return 'high';
+  }
+
+  /**
+   * Internal helper to determine candidate eligibility across Quota and Health Registry.
+   * Pure read query: does NOT consume quota or mutate state.
+   * @private
+   */
+  _isEligibleCandidate(m, heartbeatRegistry) {
+    const quotaOk = quotaGuard.canProceed(m.provider, m.limits);
+    const healthOk = typeof heartbeatRegistry.isCandidateEligible === 'function'
+      ? heartbeatRegistry.isCandidateEligible(m.provider, m.model_id)
+      : heartbeatRegistry.isHealthy(m.provider, m.model_id);
+    return quotaOk && healthOk;
+  }
+
+  /**
+   * Routes a task to a model.
+   * @param {Object} requirements - { modalities: [], minContext: number, preferredTier: string, context: Object }
+   * @returns {Object} Selected ModelCapabilitySchema
+   */
   route(requirements = {}) {
-    const { modalities = ["text"], minContext = 0, preferredTier = "high" } = requirements;
+    let { modalities = ["text"], minContext = 0, preferredTier, context } = requirements;
+
+    // Apply Adaptive Effort Routing if preferredTier not explicitly set
+    if (!preferredTier && context) {
+      preferredTier = this.calculateComplexityScore(context);
+    } else if (!preferredTier) {
+      preferredTier = 'high';
+    }
 
     // 1. Filter by mandatory capabilities
     let candidates = modelRegistry.getModelsByCapability(modalities)
@@ -25,12 +76,7 @@ class CapabilityAwareRouter {
     // 2. Filter by Quota Availability & Heartbeat Status
     const heartbeatRegistry = require('../registry/heartbeat_registry');
     
-    candidates = candidates.filter(m => {
-      const quotaOk = quotaGuard.canProceed(m.provider, m.limits);
-      const status = heartbeatRegistry.getStatus(m.provider);
-      // Avoid providers that are explicitly degraded if we have other options
-      return quotaOk && status !== 'degraded';
-    });
+    candidates = candidates.filter(m => this._isEligibleCandidate(m, heartbeatRegistry));
 
     // If all are degraded, try to use them anyway as a last resort (Level 1 Fallback)
     if (candidates.length === 0) {
@@ -60,7 +106,7 @@ class CapabilityAwareRouter {
     });
 
     const selected = candidates[0];
-    console.log(`[Router] Task routed to: ${selected.model_id} (${selected.provider})`);
+    console.log(`[Router] Task routed to: ${selected.model_id} (${selected.provider}, Tier: ${selected.performance_tier})`);
     return selected;
   }
 
@@ -72,9 +118,17 @@ class CapabilityAwareRouter {
     const { modalities = ["text"], minContext = 0, preferredTier = "high" } = requirements;
     const heartbeatRegistry = require('../registry/heartbeat_registry');
 
-    // 1. All capable models
+    // 1. All capable models filtered by candidate eligibility (Quota + Health)
     let candidates = modelRegistry.getModelsByCapability(modalities)
-      .filter(m => m.context_window >= minContext);
+      .filter(m => m.context_window >= minContext)
+      .filter(m => this._isEligibleCandidate(m, heartbeatRegistry));
+
+    // Fallback: If all primary candidates are degraded, allow capable models with available quota as fallback
+    if (candidates.length === 0) {
+      candidates = modelRegistry.getModelsByCapability(modalities)
+        .filter(m => m.context_window >= minContext)
+        .filter(m => quotaGuard.canProceed(m.provider, m.limits));
+    }
 
     // 2. Sort them (Tier match -> Tier level -> Latency)
     candidates.sort((a, b) => {
