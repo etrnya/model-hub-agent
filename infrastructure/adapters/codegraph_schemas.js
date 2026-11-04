@@ -1,8 +1,9 @@
 /**
  * CodeGraph Schemas and Validators
- * Standardizes schema validation for all CodeGraph CLI JSON payloads.
- * Part of Phase 1-C1 Hardening.
+ * Standardizes schema validation for all CodeGraph CLI JSON payloads,
+ * SourceEvidence objects, and Agent OS Blast Radius assessments.
  * 
+ * Part of Phase 1-C1 & Phase 1-C2.
  * Author: etrnya
  */
 const Ajv = require('ajv');
@@ -93,7 +94,7 @@ const CalleeRelationSchema = {
   additionalProperties: true
 };
 
-// 4. ImpactAnalysis Schema
+// 4. ImpactAnalysis Schema (CLI raw output)
 const ImpactAnalysisSchema = {
   type: 'object',
   required: ['symbol', 'blastRadius', 'affected'],
@@ -137,6 +138,67 @@ const CodeGraphStatusSchema = {
   additionalProperties: true
 };
 
+// 6. SourceEvidence Schema (P1-C2 Provenance & Line Verification)
+const SourceEvidenceSchema = {
+  type: 'object',
+  required: ['symbol', 'filePath', 'lineRange', 'fileSha256', 'snippetSha256', 'validationStatus'],
+  properties: {
+    symbol: { type: 'string', minLength: 1 },
+    filePath: { type: 'string', minLength: 1 },
+    lineRange: {
+      type: 'array',
+      items: { type: 'integer', minimum: 1 },
+      minItems: 2,
+      maxItems: 2
+    },
+    fileSha256: { type: 'string', minLength: 64, maxLength: 64 },
+    snippetSha256: { type: 'string', minLength: 64, maxLength: 64 },
+    verifiedInIndex: { type: 'boolean' },
+    indexGeneratedAt: { type: 'string' },
+    validationStatus: {
+      type: 'string',
+      enum: ['VERIFIED', 'STALE', 'UNVERIFIED', 'AMBIGUOUS', 'OUT_OF_BOUNDS', 'MISMATCH']
+    },
+    reason: { type: 'string' },
+    confidence: { type: 'string', enum: ['HIGH', 'MEDIUM', 'LOW'] }
+  },
+  additionalProperties: true
+};
+
+// 7. AgentBlastRadius Schema (P1-C2 Explainable Risk Assessment)
+const AgentBlastRadiusSchema = {
+  type: 'object',
+  required: ['symbol', 'assessedBlastRadius', 'confidence', 'riskFactors', 'rationale'],
+  properties: {
+    symbol: { type: 'string', minLength: 1 },
+    assessedBlastRadius: {
+      type: 'string',
+      enum: ['ISOLATED', 'LOW', 'MEDIUM', 'HIGH', 'CRITICAL']
+    },
+    confidence: {
+      type: 'string',
+      enum: ['HIGH', 'MEDIUM', 'LOW', 'INCOMPLETE']
+    },
+    riskFactors: {
+      type: 'array',
+      items: { type: 'string' }
+    },
+    rationale: { type: 'string', minLength: 1 },
+    affectedSummary: {
+      type: 'object',
+      properties: {
+        totalAffected: { type: 'integer', minimum: 0 },
+        entrypoints: { type: 'array', items: { type: 'string' } },
+        tests: { type: 'array', items: { type: 'string' } },
+        modules: { type: 'array', items: { type: 'string' } }
+      },
+      additionalProperties: true
+    },
+    rawCliImpact: { type: 'object' }
+  },
+  additionalProperties: true
+};
+
 const compileValidator = (schema) => {
   const validate = ajv.compile(schema);
   return (data, throwOnError = false) => {
@@ -157,6 +219,8 @@ const validateCallerRelation = compileValidator(CallerRelationSchema);
 const validateCalleeRelation = compileValidator(CalleeRelationSchema);
 const validateImpactAnalysis = compileValidator(ImpactAnalysisSchema);
 const validateCodeGraphStatus = compileValidator(CodeGraphStatusSchema);
+const validateSourceEvidence = compileValidator(SourceEvidenceSchema);
+const validateAgentBlastRadius = compileValidator(AgentBlastRadiusSchema);
 
 module.exports = {
   CodeGraphValidationError,
@@ -165,10 +229,13 @@ module.exports = {
   CalleeRelationSchema,
   ImpactAnalysisSchema,
   CodeGraphStatusSchema,
+  SourceEvidenceSchema,
+  AgentBlastRadiusSchema,
   validateCodeGraphNode,
   validateCallerRelation,
   validateCalleeRelation,
   validateImpactAnalysis,
-  validateCodeGraphStatus
+  validateCodeGraphStatus,
+  validateSourceEvidence,
+  validateAgentBlastRadius
 };
-
