@@ -3,7 +3,7 @@
  * Standardizes schema validation for all CodeGraph CLI JSON payloads,
  * SourceEvidence objects, and Agent OS Blast Radius assessments.
  * 
- * Part of Phase 1-C1 & Phase 1-C2.
+ * Part of Phase 1-C1 & Phase 1-C2 (Audited & Disambiguated).
  * Author: etrnya
  */
 const Ajv = require('ajv');
@@ -138,10 +138,10 @@ const CodeGraphStatusSchema = {
   additionalProperties: true
 };
 
-// 6. SourceEvidence Schema (P1-C2 Provenance & Line Verification)
+// 6. SourceEvidence Schema (Strict physical evidence & provenance)
 const SourceEvidenceSchema = {
   type: 'object',
-  required: ['symbol', 'filePath', 'lineRange', 'fileSha256', 'snippetSha256', 'validationStatus'],
+  required: ['symbol', 'filePath', 'lineRange', 'fileSha256', 'snippetSha256', 'validationStatus', 'confidence'],
   properties: {
     symbol: { type: 'string', minLength: 1 },
     filePath: { type: 'string', minLength: 1 },
@@ -159,16 +159,17 @@ const SourceEvidenceSchema = {
       type: 'string',
       enum: ['VERIFIED', 'STALE', 'UNVERIFIED', 'AMBIGUOUS', 'OUT_OF_BOUNDS', 'MISMATCH']
     },
-    reason: { type: 'string' },
-    confidence: { type: 'string', enum: ['HIGH', 'MEDIUM', 'LOW'] }
+    confidence: { type: 'string', enum: ['HIGH', 'MEDIUM', 'LOW'] },
+    analysisCompleteness: { type: 'string', enum: ['COMPLETE', 'PARTIAL', 'INCOMPLETE'] },
+    reason: { type: 'string' }
   },
   additionalProperties: true
 };
 
-// 7. AgentBlastRadius Schema (P1-C2 Explainable Risk Assessment)
+// 7. AgentBlastRadius Schema (Explainable assessment with separated completeness)
 const AgentBlastRadiusSchema = {
   type: 'object',
-  required: ['symbol', 'assessedBlastRadius', 'confidence', 'riskFactors', 'rationale'],
+  required: ['symbol', 'assessedBlastRadius', 'confidence', 'analysisCompleteness', 'riskFactors', 'rationale'],
   properties: {
     symbol: { type: 'string', minLength: 1 },
     assessedBlastRadius: {
@@ -177,7 +178,11 @@ const AgentBlastRadiusSchema = {
     },
     confidence: {
       type: 'string',
-      enum: ['HIGH', 'MEDIUM', 'LOW', 'INCOMPLETE']
+      enum: ['HIGH', 'MEDIUM', 'LOW']
+    },
+    analysisCompleteness: {
+      type: 'string',
+      enum: ['COMPLETE', 'PARTIAL', 'INCOMPLETE']
     },
     riskFactors: {
       type: 'array',

@@ -1,5 +1,5 @@
 /**
- * CallGraphEngine (P1-C2)
+ * CallGraphEngine (P1-C2 Audited)
  * Comprehensive Graph Analysis, Cycle-Safe Traversal, Explainable Impact Assessment,
  * and Provenance Line Verification Engine for Agent OS.
  * 
@@ -66,7 +66,6 @@ class CallGraphEngine {
     let primaryNode = null;
 
     if (targetNodes.length > 1) {
-      // Check if they are from different files
       const distinctFiles = new Set(targetNodes.map(n => n.filePath));
       if (distinctFiles.size > 1) {
         isAmbiguous = true;
@@ -243,7 +242,8 @@ class CallGraphEngine {
 
   /**
    * C2-C: Explainable Agent OS Blast Radius Assessment Engine.
-   * Distinct from raw CLI impact output, applies multi-dimensional heuristic rules.
+   * Separates observable risk level from analysis completeness.
+   * Follows strict, deterministic priority ladder.
    * 
    * @param {string} symbol
    * @param {object} [options]
@@ -270,7 +270,6 @@ class CallGraphEngine {
     // 3. Extract Affected Components
     const affected = rawCli.affected || [];
     const affectedFiles = new Set(affected.map(a => a.filePath).filter(Boolean));
-    // Include graph nodes
     for (const node of graph.nodes) {
       if (node.filePath && node.filePath !== 'UNKNOWN') {
         affectedFiles.add(node.filePath);
@@ -285,12 +284,11 @@ class CallGraphEngine {
     // 4. Multi-Factor Risk Assessment
     const riskFactors = [];
 
-    // Factor: Callers count (incoming edges to target)
     const incomingEdges = graph.edges.filter(e => e.to === validSymbol || e.to.endsWith(`::${validSymbol}`));
     const isIsolated = incomingEdges.length === 0 && (affected.length === 0 || (affected.length === 1 && affected[0].name === validSymbol));
 
     if (isIsolated) {
-      riskFactors.push('ISOLATED_SYMBOL_NO_CALLERS');
+      riskFactors.push('OBSERVED_ISOLATED_IN_STATIC_GRAPH');
     }
 
     if (entrypoints.length > 0) {
@@ -303,7 +301,6 @@ class CallGraphEngine {
       riskFactors.push('TEST_SUITE_AFFECTED');
     }
 
-    // Module directory diversity check
     const moduleDirs = new Set(allFiles.map(f => path.dirname(f)).filter(d => d && d !== '.'));
     if (moduleDirs.size >= 2) {
       riskFactors.push(`CROSS_MODULE_IMPACT:${moduleDirs.size}_directories`);
@@ -317,14 +314,28 @@ class CallGraphEngine {
       riskFactors.push('INCOMPLETE_STATIC_ANALYSIS');
     }
 
-    // 5. Deterministic Explainable Classification
+    // 5. Analysis Completeness & Confidence (Orthogonal to risk level)
+    let analysisCompleteness = 'COMPLETE';
+    let confidence = 'HIGH';
+
+    if (!isComplete || !graph.isComplete) {
+      analysisCompleteness = 'INCOMPLETE';
+      confidence = 'LOW';
+    } else if (graph.isAmbiguous) {
+      analysisCompleteness = 'PARTIAL';
+      confidence = 'MEDIUM';
+    }
+
+    // 6. Strict Deterministic Priority Ladder for Risk Level
+    // Priority 1: CRITICAL (Entrypoint + Cross Module)
+    // Priority 2: HIGH (Entrypoint OR Files > 10 OR Cycles)
+    // Priority 3: MEDIUM (Cross Module OR Tests >= 2 OR Files > 2)
+    // Priority 4: LOW (1..2 Local Files)
+    // Priority 5: ISOLATED (0 Callers in static graph)
     let assessedBlastRadius = 'LOW';
     let rationale = '';
 
-    if (isIsolated) {
-      assessedBlastRadius = 'ISOLATED';
-      rationale = `Symbol "${validSymbol}" has 0 incoming callers and does not affect external components. Changes are safely localized.`;
-    } else if (entrypoints.length > 0 && moduleDirs.size >= 2) {
+    if (entrypoints.length > 0 && moduleDirs.size >= 2) {
       assessedBlastRadius = 'CRITICAL';
       rationale = `Critical blast radius: Changing "${validSymbol}" directly impacts runtime entrypoint (${entrypoints.join(', ')}) across ${moduleDirs.size} architectural modules.`;
     } else if (entrypoints.length > 0 || allFiles.length > 10 || graph.hasCycles) {
@@ -333,18 +344,18 @@ class CallGraphEngine {
     } else if (moduleDirs.size >= 2 || tests.length >= 2 || allFiles.length > 2) {
       assessedBlastRadius = 'MEDIUM';
       rationale = `Medium blast radius: Affects ${allFiles.length} components across ${moduleDirs.size} modules and ${tests.length} test suites. Requires regression verification.`;
+    } else if (isIsolated) {
+      assessedBlastRadius = 'ISOLATED';
+      rationale = `In currently observable static call graph, 0 incoming callers were detected for "${validSymbol}". (Notice: Dynamic calls, external webhooks, events, or reflection are not covered by static analysis).`;
     } else {
       assessedBlastRadius = 'LOW';
       rationale = `Low blast radius: Changes to "${validSymbol}" affect strictly ${allFiles.length} localized component(s) without cross-module impact.`;
     }
 
-    // 6. Confidence Assessment
-    let confidence = 'HIGH';
-    if (!isComplete || !graph.isComplete) {
-      confidence = 'INCOMPLETE';
+    // Append completeness caveat if incomplete
+    if (analysisCompleteness === 'INCOMPLETE') {
       rationale += ' [Warning: Static graph contains unresolved dependencies or dynamic calls; analysis is incomplete.]';
-    } else if (graph.isAmbiguous) {
-      confidence = 'MEDIUM';
+    } else if (analysisCompleteness === 'PARTIAL') {
       rationale += ' [Notice: Symbol name is shared across multiple files; assessment aggregated candidates.]';
     }
 
@@ -352,6 +363,7 @@ class CallGraphEngine {
       symbol: validSymbol,
       assessedBlastRadius,
       confidence,
+      analysisCompleteness,
       riskFactors,
       rationale,
       affectedSummary: {
@@ -399,10 +411,8 @@ class CallGraphEngine {
     } else if (typeof nodeOrSymbol === 'string') {
       symbol = nodeOrSymbol;
       if (!filePath) {
-        // Query node from AST
         const nodes = await this.adapter.querySymbols(symbol, { limit: 5 });
         if (nodes.length === 0) {
-          // Symbol not found in index
           const emptyHash = crypto.createHash('sha256').update('').digest('hex');
           const unverifiedEvidence = {
             symbol,
@@ -412,24 +422,19 @@ class CallGraphEngine {
             snippetSha256: emptyHash,
             verifiedInIndex: false,
             validationStatus: 'UNVERIFIED',
-            reason: `Symbol "${symbol}" was not found in CodeGraph AST index`,
-            confidence: 'LOW'
+            confidence: 'LOW',
+            analysisCompleteness: 'INCOMPLETE',
+            reason: `Symbol "${symbol}" was not found in CodeGraph AST index`
           };
           validateSourceEvidence(unverifiedEvidence, true);
           return unverifiedEvidence;
         }
 
-        if (nodes.length > 1) {
-          // Ambiguous candidates
-          const target = nodes[0];
-          filePath = target.filePath;
-          startLine = target.startLine;
-          endLine = target.endLine;
-        } else {
-          filePath = nodes[0].filePath;
-          startLine = nodes[0].startLine;
-          endLine = nodes[0].endLine;
-        }
+        const target = nodes[0];
+        filePath = target.filePath;
+        startLine = target.startLine;
+        endLine = target.endLine;
+        indexTimestamp = indexTimestamp || target.updatedAt || null;
       }
     }
 
@@ -449,8 +454,9 @@ class CallGraphEngine {
         snippetSha256: emptyHash,
         verifiedInIndex: false,
         validationStatus: 'UNVERIFIED',
-        reason: `File path inaccessible: ${e.message}`,
-        confidence: 'LOW'
+        confidence: 'LOW',
+        analysisCompleteness: 'INCOMPLETE',
+        reason: `File path inaccessible: ${e.message}`
       };
       validateSourceEvidence(unverifiedEvidence, true);
       return unverifiedEvidence;
@@ -474,8 +480,9 @@ class CallGraphEngine {
         snippetSha256: crypto.createHash('sha256').update('').digest('hex'),
         verifiedInIndex: true,
         validationStatus: 'OUT_OF_BOUNDS',
-        reason: `Coordinates [${startLine}, ${endLine}] exceed physical file bounds (1 to ${totalLines} lines)`,
-        confidence: 'LOW'
+        confidence: 'LOW',
+        analysisCompleteness: 'PARTIAL',
+        reason: `Coordinates [${startLine}, ${endLine}] exceed physical file bounds (1 to ${totalLines} lines)`
       };
       validateSourceEvidence(outOfBoundsEvidence, true);
       return outOfBoundsEvidence;
@@ -487,7 +494,6 @@ class CallGraphEngine {
     const snippetSha256 = crypto.createHash('sha256').update(snippetContent).digest('hex');
 
     // 4. Feature Verification: Does snippet actually contain the symbol?
-    // Matches exact symbol or declaration pattern
     const symbolClean = validSymbol.split('::').pop();
     const symbolRegex = new RegExp(`\\b${symbolClean}\\b`);
     const symbolMatches = symbolRegex.test(snippetContent);
@@ -501,8 +507,9 @@ class CallGraphEngine {
         snippetSha256,
         verifiedInIndex: true,
         validationStatus: 'MISMATCH',
-        reason: `Target symbol "${validSymbol}" was NOT found in code lines [${startLine}, ${endLine}]. Code has drifted.`,
-        confidence: 'LOW'
+        confidence: 'LOW',
+        analysisCompleteness: 'PARTIAL',
+        reason: `Target symbol "${validSymbol}" was NOT found in code lines [${startLine}, ${endLine}]. Code has drifted.`
       };
       validateSourceEvidence(mismatchEvidence, true);
       return mismatchEvidence;
@@ -513,7 +520,7 @@ class CallGraphEngine {
     let reason = 'Code snippet strictly matches AST node and physical line coordinates.';
     let confidence = 'HIGH';
 
-    if (indexTimestamp && stat.mtimeMs > indexTimestamp + 2000) { // 2s tolerance
+    if (indexTimestamp && stat.mtimeMs > indexTimestamp + 2000) {
       validationStatus = 'STALE';
       reason = `File was modified on disk (${new Date(stat.mtimeMs).toISOString()}) after index was created (${new Date(indexTimestamp).toISOString()}). Snippet verified but index may be stale.`;
       confidence = 'MEDIUM';
@@ -528,8 +535,9 @@ class CallGraphEngine {
       verifiedInIndex: true,
       indexGeneratedAt: indexTimestamp ? new Date(indexTimestamp).toISOString() : new Date().toISOString(),
       validationStatus,
-      reason,
-      confidence
+      confidence,
+      analysisCompleteness: 'COMPLETE',
+      reason
     };
 
     validateSourceEvidence(verifiedEvidence, true);
@@ -538,4 +546,3 @@ class CallGraphEngine {
 }
 
 module.exports = CallGraphEngine;
-

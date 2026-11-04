@@ -4,8 +4,9 @@
  * 
  * Validates:
  * - Group A: Call Graph (Multilayer, Callers, Callees, Cycles, Duplicate Edges, Ambiguities, Depths)
- * - Group B: Explainable Blast Radius Impact Engine (Isolated, Leaf, Intermediate, Hub/Entry, Cyclic, Incomplete)
+ * - Group B: Explainable Blast Radius Impact Engine (Orthogonal Completeness, Priority Ladder, Isolated Boundary)
  * - Group C: Line Provenance Verification (Verified, Out-of-Bounds, Mismatch, Stale, Unverified)
+ * - Group D: Real TaskManager Assessment
  * 
  * Author: etrnya
  */
@@ -52,7 +53,6 @@ async function runAll() {
     console.log("--- Group A: Call Graph Traversal, Cycles & Dedup ---");
 
     await runTestCase('C2-A1', 'A calls B, B calls C (Multilayer Callers & Callees)', async () => {
-      // Mock CLI runner simulating A -> B -> C call graph
       const mockRunner = async (args) => {
         const cmd = args[0];
         const sym = args[1];
@@ -94,7 +94,6 @@ async function runAll() {
     });
 
     await runTestCase('C2-A2', 'Cycle Detection & Safe Pruning (A -> B -> C -> A)', async () => {
-      // Mock cyclic graph
       const mockRunner = async (args) => {
         const cmd = args[0];
         const sym = args[1];
@@ -115,7 +114,6 @@ async function runAll() {
       const graph = await engine.buildCallGraph('A', { direction: 'outgoing', maxDepth: 5 });
       assert.strictEqual(graph.hasCycles, true, 'Must detect cycle');
       assert.strictEqual(graph.cycles.length > 0, true);
-      // Cycles must not loop infinitely
       assert.strictEqual(graph.nodes.length <= 4, true);
     });
 
@@ -135,12 +133,10 @@ async function runAll() {
       const adapter = new CodeGraphAdapter(projectRoot, { cliRunner: mockRunner });
       const engine = new CallGraphEngine(adapter);
 
-      // Query ambiguous symbol
       const result = await engine.buildCallGraph('validate');
       assert.strictEqual(result.isAmbiguous, true);
       assert.strictEqual(result.candidates.length, 2);
 
-      // Query with specific filePath disambiguation
       const disambiguated = await engine.buildCallGraph('validate', { filePath: 'auth.js' });
       assert.strictEqual(disambiguated.rootKey.includes('auth.js'), true);
     });
@@ -153,13 +149,12 @@ async function runAll() {
           return JSON.stringify([{ node: { name: sym, filePath: `src/${sym}.js`, startLine: 1, endLine: 10 } }]);
         }
         if (cmd === 'callees') {
-          // Both A and D call B (multiple edges pointing to B)
           if (sym === 'A') {
             return JSON.stringify({
               symbol: 'A',
               callees: [
                 { name: 'B', filePath: 'src/B.js', startLine: 1 },
-                { name: 'B', filePath: 'src/B.js', startLine: 1 } // duplicate returned by raw tool
+                { name: 'B', filePath: 'src/B.js', startLine: 1 }
               ]
             });
           }
@@ -176,7 +171,6 @@ async function runAll() {
       const adapter = new CodeGraphAdapter(projectRoot, { cliRunner: mockRunner });
       const engine = new CallGraphEngine(adapter);
 
-      // maxDepth = 1 should not expand B -> C
       const depth1 = await engine.buildCallGraph('A', { direction: 'outgoing', maxDepth: 1 });
       assert.strictEqual(depth1.nodes.some(n => n.name === 'C'), false, 'C should not be reached at depth 1');
       assert.strictEqual(depth1.edges.length, 1, 'Duplicate edge to B must be deduplicated');
@@ -187,7 +181,7 @@ async function runAll() {
     // ========================================================
     console.log("\n--- Group B: Explainable Blast Radius Assessment ---");
 
-    await runTestCase('C2-B1', 'Isolated Leaf Node evaluates to ISOLATED / LOW risk', async () => {
+    await runTestCase('C2-B1', 'Isolated Leaf Node evaluates to ISOLATED with static boundary caveat', async () => {
       const mockRunner = async (args) => {
         const cmd = args[0];
         if (cmd === 'query') return JSON.stringify([{ node: { name: 'leafHelper', filePath: 'src/utils/leaf.js', startLine: 1, endLine: 5 } }]);
@@ -206,18 +200,21 @@ async function runAll() {
 
       const assessment = await engine.assessBlastRadius('leafHelper');
       assert.strictEqual(assessment.assessedBlastRadius, 'ISOLATED');
-      assert.strictEqual(assessment.riskFactors.includes('ISOLATED_SYMBOL_NO_CALLERS'), true);
-      assert.strictEqual(assessment.rationale.includes('0 incoming callers'), true);
+      assert.strictEqual(assessment.confidence, 'HIGH');
+      assert.strictEqual(assessment.analysisCompleteness, 'COMPLETE');
+      assert.strictEqual(assessment.riskFactors.includes('OBSERVED_ISOLATED_IN_STATIC_GRAPH'), true);
+      assert.strictEqual(assessment.rationale.includes('observable static call graph'), true);
     });
 
     await runTestCase('C2-B2', 'Intermediate Module Component evaluates to MEDIUM risk', async () => {
       const mockRunner = async (args) => {
         const cmd = args[0];
+        const sym = args[1];
         if (cmd === 'query') return JSON.stringify([{ node: { name: 'formatResponse', filePath: 'services/formatter.js', startLine: 1, endLine: 20 } }]);
         if (cmd === 'impact') {
           return JSON.stringify({
             symbol: 'formatResponse',
-            blastRadius: 'LOW', // Raw CLI may say LOW, but Agent OS will evaluate cross-module tests
+            blastRadius: 'LOW',
             affected: [
               { name: 'formatResponse', kind: 'function', filePath: 'services/formatter.js', startLine: 1 },
               { name: 'helper', kind: 'function', filePath: 'services/helper.js', startLine: 5 },
@@ -227,15 +224,15 @@ async function runAll() {
           });
         }
         if (cmd === 'callers') {
-          if (args[1] === 'formatResponse') {
+          if (sym === 'formatResponse') {
             return JSON.stringify({
               symbol: 'formatResponse',
               callers: [{ name: 'helper', filePath: 'services/helper.js', startLine: 5 }]
             });
           }
-          return JSON.stringify({ symbol: args[1], callers: [] });
+          return JSON.stringify({ symbol: sym, callers: [] });
         }
-        return JSON.stringify({ symbol: args[1], callers: [], callees: [] });
+        return JSON.stringify({ symbol: sym, callers: [], callees: [] });
       };
 
       const adapter = new CodeGraphAdapter(projectRoot, { cliRunner: mockRunner });
@@ -243,6 +240,7 @@ async function runAll() {
 
       const assessment = await engine.assessBlastRadius('formatResponse');
       assert.strictEqual(assessment.assessedBlastRadius, 'MEDIUM');
+      assert.strictEqual(assessment.analysisCompleteness, 'COMPLETE');
       assert.strictEqual(assessment.riskFactors.some(f => f.startsWith('MULTIPLE_TEST_SUITES_AFFECTED')), true);
     });
 
@@ -281,7 +279,7 @@ async function runAll() {
       assert.strictEqual(assessment.affectedSummary.entrypoints.includes('server.js'), true);
     });
 
-    await runTestCase('C2-B4', 'Incomplete analysis or dynamic calls flag confidence as INCOMPLETE', async () => {
+    await runTestCase('C2-B4', 'Incomplete dynamic calls set analysisCompleteness to INCOMPLETE orthogonally', async () => {
       const mockRunner = async (args) => {
         const cmd = args[0];
         if (cmd === 'impact') {
@@ -294,8 +292,11 @@ async function runAll() {
       const engine = new CallGraphEngine(adapter);
 
       const assessment = await engine.assessBlastRadius('dynamicFunction');
-      assert.strictEqual(assessment.confidence, 'INCOMPLETE');
+      // Incomplete analysis is strictly separated into analysisCompleteness
+      assert.strictEqual(assessment.analysisCompleteness, 'INCOMPLETE');
+      assert.strictEqual(assessment.confidence, 'LOW');
       assert.strictEqual(assessment.riskFactors.includes('INCOMPLETE_STATIC_ANALYSIS'), true);
+      assert.strictEqual(typeof assessment.assessedBlastRadius, 'string');
     });
 
     // ========================================================
@@ -338,6 +339,7 @@ async function runAll() {
 
       assert.strictEqual(evidence.validationStatus, 'VERIFIED');
       assert.strictEqual(evidence.confidence, 'HIGH');
+      assert.strictEqual(evidence.analysisCompleteness, 'COMPLETE');
       assert.strictEqual(evidence.verifiedInIndex, true);
       assert.strictEqual(typeof evidence.fileSha256, 'string');
       assert.strictEqual(evidence.fileSha256.length, 64);
@@ -353,7 +355,7 @@ async function runAll() {
         name: 'ServiceWorker',
         filePath: relSampleFile,
         startLine: 1,
-        endLine: 999 // File only has 13 lines
+        endLine: 999
       });
 
       assert.strictEqual(evidence.validationStatus, 'OUT_OF_BOUNDS');
@@ -365,7 +367,6 @@ async function runAll() {
       const adapter = new CodeGraphAdapter(projectRoot);
       const engine = new CallGraphEngine(adapter);
 
-      // Line 1 to 2 contains comments and config, NOT ServiceWorker
       const evidence = await engine.verifyLineProvenance({
         name: 'ServiceWorker',
         filePath: relSampleFile,
@@ -382,7 +383,6 @@ async function runAll() {
       const adapter = new CodeGraphAdapter(projectRoot);
       const engine = new CallGraphEngine(adapter);
 
-      // Index timestamp is 1 hour ago
       const pastIndexTimestamp = Date.now() - 3600 * 1000;
 
       const evidence = await engine.verifyLineProvenance(
@@ -417,7 +417,7 @@ async function runAll() {
     });
 
     // ========================================================
-    // Group D: Real Local CodeGraph Integration (TaskManager)
+    // Group D: Real TaskManager Assessment
     // ========================================================
     console.log("\n--- Group D: Real TaskManager Assessment ---");
 
@@ -426,7 +426,7 @@ async function runAll() {
       const engine = new CallGraphEngine(adapter);
 
       const assessment = await engine.assessBlastRadius('TaskManager');
-      console.log(`    TaskManager Assessed Risk: ${assessment.assessedBlastRadius} (Confidence: ${assessment.confidence})`);
+      console.log(`    TaskManager Assessed Risk: ${assessment.assessedBlastRadius} (Confidence: ${assessment.confidence}, Completeness: ${assessment.analysisCompleteness})`);
       console.log(`    Identified Risk Factors: ${assessment.riskFactors.join(', ')}`);
       console.log(`    Rationale: ${assessment.rationale}`);
 
@@ -434,7 +434,6 @@ async function runAll() {
       assert.strictEqual(assessment.affectedSummary.entrypoints.includes('server.js'), true);
       assert.strictEqual(assessment.affectedSummary.tests.length >= 2, true);
 
-      // Verify physical line provenance on TaskManager
       const lineEvidence = await engine.verifyLineProvenance('TaskManager');
       assert.strictEqual(['VERIFIED', 'STALE'].includes(lineEvidence.validationStatus), true);
       console.log(`    TaskManager Line Provenance Status: ${lineEvidence.validationStatus} (Lines [${lineEvidence.lineRange.join(', ')}])`);
