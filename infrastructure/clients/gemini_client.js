@@ -96,12 +96,13 @@ class GeminiClient extends BaseClient {
 
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}));
-        const mappedErrorType = errorMapper.map('google', { 
-          status: response.status, 
-          message: errorData.error?.message || response.statusText 
+        throw errorMapper.createError('google', {
+          status: response.status,
+          message: errorData.error?.message || response.statusText,
+          headers: response.headers,
+          error: errorData,
+          modelId: this.modelCapability.model_id
         });
-        
-        throw new Error(`[${mappedErrorType}] Gemini API request failed: ${JSON.stringify(errorData)}`);
       }
 
       const data = await response.json();
@@ -115,10 +116,13 @@ class GeminiClient extends BaseClient {
       return content;
 
     } catch (error) {
-      if (error.message.startsWith("[HUB_")) throw error;
+      if (error instanceof errorMapper.HubError || error.message.startsWith("[HUB_")) throw error;
       
-      const mappedErrorType = errorMapper.map('google', { status: 500, message: error.message });
-      throw new Error(`[${mappedErrorType}] Network or execution error: ${error.message}`);
+      throw errorMapper.createError('google', {
+        cause: error,
+        message: error.message,
+        modelId: this.modelCapability.model_id
+      });
     }
   }
 }

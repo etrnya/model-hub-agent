@@ -8,41 +8,27 @@ const crypto = require('crypto');
 class MemoryManager {
   constructor() {
     this.qdrantUrl = process.env.QDRANT_URL || 'http://localhost:6333';
+    this.collectionName = 'global_shared_memory';
   }
 
   /**
-   * Generates a 768-dimension embedding for the given text using Google's text-embedding-004 model.
+   * Generates a 768-dimension embedding for the given text using Google AI Studio's gemini-embedding-001 model.
    * @param {string} text 
    * @returns {Promise<Array<number>>}
    */
   async getEmbedding(text) {
-    const fs = require('fs');
-    const gcpKeyPath = process.env.GCP_KEY_PATH;
+    const apiKey = process.env.GEMINI_API_KEY;
 
-    if (!gcpKeyPath) {
-      throw new Error("GCP_KEY_PATH is required for Vertex AI embedding generation.");
+    if (!apiKey) {
+      throw new Error("GEMINI_API_KEY is required for AI Studio embedding generation.");
     }
 
-    const { GoogleAuth } = require('google-auth-library');
-    const auth = new GoogleAuth({
-      keyFile: gcpKeyPath,
-      scopes: ['https://www.googleapis.com/auth/cloud-platform']
-    });
-    const client = await auth.getClient();
-    const tokenResponse = await client.getAccessToken();
-    const token = tokenResponse.token;
-
-    const keyData = JSON.parse(fs.readFileSync(gcpKeyPath, 'utf8'));
-    const projectId = keyData.project_id;
-    const location = 'us-central1';
-
-    let url = `https://${location}-aiplatform.googleapis.com/v1/projects/${projectId}/locations/${location}/publishers/google/models/text-embedding-004:predict`;
+    let url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent?key=${apiKey}`;
 
     // Route through Headroom Proxy if enabled
     const useProxy = process.env.USE_HEADROOM_PROXY === 'true';
     const proxyUrl = process.env.HEADROOM_PROXY_URL || 'http://localhost:8787';
     let headers = {
-      "Authorization": `Bearer ${token}`,
       "Content-Type": "application/json"
     };
 
@@ -57,31 +43,31 @@ class MemoryManager {
       method: "POST",
       headers,
       body: JSON.stringify({
-        instances: [
-          { content: text }
-        ]
+        content: {
+          parts: [{ text: text }]
+        }
       })
     });
 
     if (!response.ok) {
       const err = await response.text();
-      throw new Error(`Vertex AI embedding generation failed: ${err}`);
+      throw new Error(`AI Studio embedding generation failed: ${err}`);
     }
 
     const data = await response.json();
-    if (!data.predictions || data.predictions.length === 0 || !data.predictions[0].embeddings) {
-      throw new Error(`Invalid Vertex AI embedding response: ${JSON.stringify(data)}`);
+    if (!data.embedding || !data.embedding.values) {
+      throw new Error(`Invalid AI Studio embedding response: ${JSON.stringify(data)}`);
     }
 
-    return data.predictions[0].embeddings.values;
+    return data.embedding.values;
   }
 
   /**
-   * Initializes the 'task_memory' collection in Qdrant if it doesn't already exist.
+   * Initializes the 'global_shared_memory' collection in Qdrant if it doesn't already exist.
    */
   async initCollection() {
     try {
-      const checkRes = await fetch(`${this.qdrantUrl}/collections/task_memory`);
+      const checkRes = await fetch(`${this.qdrantUrl}/collections/${this.collectionName}`);
       if (checkRes.ok) {
         return; // Already exists
       }
@@ -90,9 +76,9 @@ class MemoryManager {
       return;
     }
 
-    console.log(`🧠 [MemoryManager] Creating 'task_memory' collection in Qdrant...`);
+    console.log(`🧠 [MemoryManager] Creating '${this.collectionName}' collection in Qdrant...`);
     try {
-      const createRes = await fetch(`${this.qdrantUrl}/collections/task_memory`, {
+      const createRes = await fetch(`${this.qdrantUrl}/collections/${this.collectionName}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -103,7 +89,7 @@ class MemoryManager {
         })
       });
       if (createRes.ok) {
-        console.log(`✅ [MemoryManager] Collection 'task_memory' created successfully.`);
+        console.log(`✅ [MemoryManager] Collection '${this.collectionName}' created successfully.`);
       } else {
         const txt = await createRes.text();
         console.error(`❌ [MemoryManager] Failed to create collection: ${txt}`);
@@ -124,7 +110,7 @@ class MemoryManager {
 
     try {
       const embedding = await this.getEmbedding(objective);
-      const searchRes = await fetch(`${this.qdrantUrl}/collections/task_memory/points/search`, {
+      const searchRes = await fetch(`${this.qdrantUrl}/collections/${this.collectionName}/points/search`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -181,7 +167,7 @@ class MemoryManager {
       // Format as MD5 UUID compatible string for Qdrant compatibility
       const id = `${hash.slice(0, 8)}-${hash.slice(8, 12)}-${hash.slice(12, 16)}-${hash.slice(16, 20)}-${hash.slice(20, 32)}`;
 
-      const upsertRes = await fetch(`${this.qdrantUrl}/collections/task_memory/points`, {
+      const upsertRes = await fetch(`${this.qdrantUrl}/collections/${this.collectionName}/points`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -201,12 +187,53 @@ class MemoryManager {
 
       if (upsertRes.ok) {
         console.log(`💾 [MemoryManager] Cached successful task execution to Qdrant memory.`);
+        // 非同步觸發主動代謝，不阻塞寫入主線程
+        this.pruneExpiredMemory().catch(err => console.warn(`⚠️ [MemoryManager] Async prune error: ${err.message}`));
       } else {
         const txt = await upsertRes.text();
         console.warn(`⚠️ [MemoryManager] Failed to save memory to Qdrant: ${txt}`);
       }
     } catch (e) {
       console.warn(`⚠️ [MemoryManager] Save memory failed: ${e.message}`);
+    }
+  }
+
+  /**
+   * Active Pruning: Physcially deletes points from Qdrant where payload.timestamp is older than TTL.
+   */
+  async pruneExpiredMemory() {
+    const ttlDays = parseInt(process.env.MEMORY_TTL_DAYS || '7', 10);
+    const ttlMs = ttlDays * 24 * 60 * 60 * 1000;
+    const expirationThreshold = Date.now() - ttlMs;
+
+    console.log(`🧹 [MemoryManager] Running Qdrant Active Pruning (TTL: ${ttlDays} days)...`);
+    try {
+      const pruneRes = await fetch(`${this.qdrantUrl}/collections/${this.collectionName}/points/delete`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          filter: {
+            must: [
+              {
+                key: 'timestamp',
+                range: {
+                  lt: expirationThreshold
+                }
+              }
+            ]
+          }
+        })
+      });
+
+      if (pruneRes.ok) {
+        const resJson = await pruneRes.json();
+        console.log(`✅ [MemoryManager] Qdrant Active Pruning completed. Result: ${JSON.stringify(resJson.result)}`);
+      } else {
+        const txt = await pruneRes.text();
+        console.warn(`⚠️ [MemoryManager] Active Pruning failed: ${txt}`);
+      }
+    } catch (e) {
+      console.warn(`⚠️ [MemoryManager] Active Pruning connection failed: ${e.message}`);
     }
   }
 }

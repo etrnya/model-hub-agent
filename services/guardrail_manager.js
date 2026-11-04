@@ -4,7 +4,7 @@
  */
 class GuardrailManager {
   constructor() {
-    // 1. Prompt Injection Patterns (Heuristic)
+    // 1. Prompt Injection & Malicious Command Patterns (AgentShield Heuristics)
     this.injectionPatterns = [
       /ignore\s+(all\s+)?previous\s+instructions/i,
       /stop\s+the\s+current\s+task/i,
@@ -12,24 +12,41 @@ class GuardrailManager {
       /switch\s+to\s+developer\s+mode/i,
       /bypass\s+all\s+filters/i,
       /system\s+role\s*:/i,
-      /\[\s*system\s*\]/i
+      /\[\s*system\s*\]/i,
+      // AgentShield - Dangerous Shell commands
+      /rm\s+-rf\s+\//i,
+      /rm\s+-rf\s+\*/i,
+      /mkfs/i,
+      /dd\s+if=/i,
+      /:\(\)\{\s*:\s*\|\s*:\s*&\s*\};/i, // Fork bomb
+      /chmod\s+([0-7])\1\1\s+/i, // chmod 777 etc
+      /chown\s+/i,
+      /shutdown\s+-h\s+now/i,
+      /reboot/i,
+      /killall/i,
+      /pkill/i,
+      /wget\s+.*\s*\|\s*bash/i,
+      /curl\s+.*\s*\|\s*bash/i
     ];
 
-    // 2. Sensitive Data Patterns (DLP)
+    // 2. Sensitive Data Patterns (DLP - credential leak protection)
     this.sensitivePatterns = {
       'API_KEY': /[a-zA-Z0-9]{32,}/, // Simple catch-all for long alphanumeric strings
-      'CREDIT_CARD': /\b(?:\d[ -]*?){13,16}\b/,
-      'EMAIL': /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/
+      'CREDIT_CARD': /\b(?:\d[ -]*?){15,16}\b/,
+      'EMAIL': /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/,
+      'AWS_ACCESS_KEY': /\bAKIA[0-9A-Z]{16}\b/,
+      'GCP_SERVICE_ACCOUNT': /"client_email":\s*"[^"]+@gp-key.json"/i,
+      'STRIPE_KEY': /\bsk_live_[0-9a-zA-Z]{24}\b/
     };
   }
 
   /**
    * Scans a task payload for security violations.
-   * @param {Object} payload - { objective, constraints, ... }
-   * @returns {Object} { safe: boolean, reason: string, sanitizedPayload: Object }
+   * @param {Object|string} payload - { objective, constraints, ... }
+   * @returns {Object} { safe: boolean, reason: string, sanitizedPayload: Object|string }
    */
   async scan(payload) {
-    const textToScan = JSON.stringify(payload);
+    const textToScan = typeof payload === 'string' ? payload : JSON.stringify(payload);
     
     // Check for Prompt Injection
     for (const pattern of this.injectionPatterns) {
@@ -43,22 +60,37 @@ class GuardrailManager {
       }
     }
 
-    // Check for Sensitive Information and Sanitize
-    let sanitizedText = textToScan;
+    // Safe Recursive Sanitization to prevent destroying JSON syntax
     let sensitiveFound = false;
-
-    for (const [type, pattern] of Object.entries(this.sensitivePatterns)) {
-      if (pattern.test(sanitizedText)) {
-        console.warn(`⚠️  [Guardrail] Privacy Warning: ${type} detected. Sanitizing...`);
-        sanitizedText = sanitizedText.replace(pattern, `[REDACTED_${type}]`);
-        sensitiveFound = true;
+    const sanitizeValue = (value) => {
+      if (typeof value === 'string') {
+        let current = value;
+        for (const [type, pattern] of Object.entries(this.sensitivePatterns)) {
+          if (pattern.test(current)) {
+            console.warn(`⚠️  [Guardrail] Privacy Warning: ${type} detected. Sanitizing...`);
+            current = current.replace(pattern, `[REDACTED_${type}]`);
+            sensitiveFound = true;
+          }
+        }
+        return current;
+      } else if (Array.isArray(value)) {
+        return value.map(item => sanitizeValue(item));
+      } else if (value !== null && typeof value === 'object') {
+        const copy = {};
+        for (const [k, v] of Object.entries(value)) {
+          copy[k] = sanitizeValue(v);
+        }
+        return copy;
       }
-    }
+      return value;
+    };
+
+    const sanitizedPayload = sanitizeValue(payload);
 
     return {
       safe: true,
       reason: sensitiveFound ? "Sanitized" : "Clean",
-      sanitizedPayload: sensitiveFound ? JSON.parse(sanitizedText) : payload
+      sanitizedPayload: sanitizedPayload
     };
   }
 }

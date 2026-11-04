@@ -1,0 +1,81 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "RoleMetaSchema",
+  "description": "Validation schema for model-hub-agent role definitions",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "name",
+    "description",
+    "recommendedTier",
+    "role_constraints",
+    "schema"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9_]{3,64}$",
+      "description": "Unique role identifier matching filename"
+    },
+    "name": {
+      "type": "string",
+      "minLength": 2,
+      "maxLength": 64,
+      "description": "Human-readable display name"
+    },
+    "description": {
+      "type": "string",
+      "minLength": 5,
+      "maxLength": 512,
+      "description": "Short description of role responsibility"
+    },
+    "recommendedTier": {
+      "type": "string",
+      "enum": ["ultra", "high", "medium", "base"],
+      "description": "Recommended model routing tier"
+    },
+    "default_tags": {
+      "type": "array",
+      "maxItems": 10,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 32
+      },
+      "description": "Default tags associated with role tasks"
+    },
+    "role_constraints": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 30,
+      "items": {
+        "type": "string",
+        "minLength": 3,
+        "maxLength": 500
+      },
+      "description": "Engineering constraints and domain rules enforced for this role"
+    },
+    "schema": {
+      "type": "object",
+      "required": ["type", "properties", "required"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["object"]
+        },
+        "properties": {
+          "type": "object"
+        },
+        "required": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "description": "Role-specific output JSON Schema for structured LLM responses"
+    }
+  }
+}
+

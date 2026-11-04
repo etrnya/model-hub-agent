@@ -1,0 +1,768 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Agent OS 核心控制台 | Antigravity Observability</title>
+  <!-- Google Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <!-- Chart.js -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            bg: '#05070f',
+            cardBg: 'rgba(13, 17, 30, 0.75)',
+            borderBg: 'rgba(255, 255, 255, 0.08)',
+            accentBlue: '#2563eb',
+            accentCyan: '#06b6d4',
+            accentGreen: '#10b981',
+            accentYellow: '#f59e0b',
+            accentRed: '#ef4444',
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    body {
+      background-color: #05070f;
+      color: #f3f4f6;
+      font-family: 'Inter', sans-serif;
+      background-image: 
+        radial-gradient(circle at 10% 20%, rgba(37, 99, 235, 0.1) 0%, transparent 40%),
+        radial-gradient(circle at 90% 80%, rgba(6, 182, 212, 0.08) 0%, transparent 40%);
+    }
+    .glass-card {
+      background: rgba(13, 17, 30, 0.75);
+      backdrop-filter: blur(12px);
+      border: 1px solid rgba(255, 255, 255, 0.06);
+      border-radius: 24px;
+      box-shadow: 0 12px 40px rgba(0, 0, 0, 0.3);
+    }
+    .glass-input {
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 12px;
+      color: #f3f4f6;
+      outline: none;
+      transition: all 0.3s ease;
+    }
+    .glass-input:focus {
+      border-color: #06b6d4;
+      box-shadow: 0 0 10px rgba(6, 182, 212, 0.2);
+    }
+    /* Custom Scrollbar */
+    ::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+    ::-webkit-scrollbar-track {
+      background: rgba(255, 255, 255, 0.02);
+    }
+    ::-webkit-scrollbar-thumb {
+      background: rgba(255, 255, 255, 0.1);
+      border-radius: 3px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: rgba(255, 255, 255, 0.2);
+    }
+  </style>
+</head>
+<body class="min-h-screen p-6">
+  <div class="max-w-7xl mx-auto space-y-6">
+    
+    <!-- Top Header -->
+    <header class="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 py-4">
+      <div>
+        <div class="flex items-center gap-2">
+          <span class="px-2 py-0.5 rounded bg-cyan-500/10 text-cyan-400 text-xs font-bold tracking-wide uppercase">Observability</span>
+          <span class="text-xs text-gray-500">v2.0.0 (ECC Active)</span>
+        </div>
+        <h1 class="text-3xl font-extrabold tracking-tight text-white mt-1">Antigravity Agent OS 控制台</h1>
+        <p class="text-sm text-gray-400">並行競速調度、語意去重、安全防護指令沙盒與即時觀測控制台</p>
+      </div>
+      <div class="flex gap-3">
+        <button onclick="fetchStats()" class="px-4 py-2.5 bg-cyan-600 text-white rounded-xl hover:bg-cyan-500 font-bold text-sm shadow-lg shadow-cyan-950 transition-all flex items-center gap-2">
+          <svg class="w-4 h-4 animate-spin hidden" id="refresh-spinner" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+          重新整理
+        </button>
+      </div>
+    </header>
+
+    <!-- Key Metrics Cards -->
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div class="glass-card p-5 flex flex-col justify-between">
+        <div class="text-xs text-gray-400 uppercase font-semibold tracking-wider">活動模型</div>
+        <div class="text-3xl font-black text-white mt-2" id="active-models-count">0 / 0</div>
+        <div class="text-xs text-cyan-400 mt-1">GCP Vertex AI, DeepSeek, NVIDIA</div>
+      </div>
+      <div class="glass-card p-5 flex flex-col justify-between">
+        <div class="text-xs text-gray-400 uppercase font-semibold tracking-wider">累計 Token 節省</div>
+        <div class="text-3xl font-black text-emerald-400 mt-2" id="saved-tokens-text">0</div>
+        <div class="text-xs text-gray-500 mt-1" id="saved-tokens-desc">由 CIG 與 Qdrant 快取省下</div>
+      </div>
+      <div class="glass-card p-5 flex flex-col justify-between">
+        <div class="text-xs text-gray-400 uppercase font-semibold tracking-wider">記憶快取命中率</div>
+        <div class="text-3xl font-black text-blue-400 mt-2" id="cache-hit-ratio">0%</div>
+        <div class="text-xs text-gray-500 mt-1">相似度 >= 99.9% 實現 0 Token 繞過</div>
+      </div>
+      <div class="glass-card p-5 flex flex-col justify-between border-red-500/20">
+        <div class="text-xs text-gray-400 uppercase font-semibold tracking-wider flex justify-between items-center">
+          <span>Session 總費用</span>
+          <button onclick="resetCircuitBreaker()" class="text-[10px] text-red-400 hover:text-red-300 border border-red-500/20 px-1.5 py-0.5 rounded hover:bg-red-500/10 transition-colors">重置</button>
+        </div>
+        <div class="text-2xl font-black mt-2 text-red-400" id="session-cost-text">$0.000000 USD</div>
+        <div class="text-[10px] text-gray-500 mt-1">單次任務上限: $0.05 | Session 上限: $0.50</div>
+      </div>
+    </div>
+
+    <!-- Observability Charts -->
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      
+      <!-- Latency chart -->
+      <div class="glass-card p-6 lg:col-span-2">
+        <h3 class="text-base font-bold text-white mb-4">即時心跳延遲 (Heartbeat Latency)</h3>
+        <div class="h-64">
+          <canvas id="latencyChart"></canvas>
+        </div>
+      </div>
+
+      <!-- Token savings -->
+      <div class="glass-card p-6">
+        <h3 class="text-base font-bold text-white mb-4">各端點 Token 消耗比例</h3>
+        <div class="h-64 flex justify-center items-center">
+          <canvas id="tokenChart" class="max-w-[200px] max-h-[200px]"></canvas>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- Main Content Section: Dispatcher vs Drift/Memory -->
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      
+      <!-- Interactive Dispatcher -->
+      <div class="glass-card p-6 space-y-4">
+        <div>
+          <h3 class="text-lg font-bold text-white">任務即時調度器 (Webhook Dispatcher)</h3>
+          <p class="text-xs text-gray-400 mt-0.5">直接向本地 Webhook `/dispatch` 發送任務</p>
+        </div>
+        
+        <div class="space-y-3">
+          <div class="flex flex-col gap-1">
+            <label class="text-xs font-bold text-gray-400">🎯 任務目標 (Objective)</label>
+            <textarea id="task-objective" rows="2" class="glass-input p-3 text-xs w-full" placeholder="例如：寫一個加密用戶密碼的 Node.js 函數..."></textarea>
+          </div>
+          
+          <div class="grid grid-cols-2 gap-3">
+            <div class="flex flex-col gap-1">
+              <label class="text-xs font-bold text-gray-400">⛓️ 限制條件 (Constraints, 逗號分隔)</label>
+              <input type="text" id="task-constraints" class="glass-input px-3 py-2 text-xs" placeholder="CommonJS, 包含錯誤處理" />
+            </div>
+            <div class="flex flex-col gap-1">
+              <label class="text-xs font-bold text-gray-400">⚡ 執行模式 & 模型階級</label>
+              <select id="task-tier" class="glass-input px-3 py-2 text-xs bg-transparent">
+                <option value="high" class="bg-gray-900">High-tier (預設)</option>
+                <option value="medium" class="bg-gray-900">Medium-tier</option>
+                <option value="base" class="bg-gray-900">Base-tier</option>
+                <option value="race" class="bg-gray-900">⚡ Parallel Racing (競速模式)</option>
+              </select>
+            </div>
+          </div>
+          
+          <div class="flex justify-end gap-2 pt-2">
+            <button onclick="submitAsyncTask()" id="async-btn" class="px-4 py-2 bg-purple-600 text-white rounded-xl hover:bg-purple-500 font-bold text-xs shadow-lg shadow-purple-950 transition-all flex items-center gap-1.5">
+              <span>⚡ 非同步派發 (POST /api/tasks)</span>
+            </button>
+            <button onclick="dispatchCustomTask()" id="dispatch-btn" class="px-4 py-2 bg-blue-600 text-white rounded-xl hover:bg-blue-500 font-bold text-xs shadow-lg shadow-blue-950 transition-all flex items-center gap-1.5">
+              <svg class="w-3.5 h-3.5 animate-spin hidden" id="dispatch-spinner" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+              <span>同步派發 (/dispatch)</span>
+            </button>
+          </div>
+        </div>
+
+        <div class="border-t border-gray-800/60 pt-3">
+          <div class="flex justify-between items-center mb-2">
+            <div class="text-xs font-bold text-gray-400">📋 最近任務清冊 (Task Store: In-Memory / Localhost)</div>
+            <button onclick="fetchTaskList()" class="text-[10px] text-cyan-400 hover:text-cyan-300">重新整理清單</button>
+          </div>
+          <div class="max-h-36 overflow-auto rounded-xl border border-gray-800/40 text-xs bg-black/40">
+            <table class="w-full text-left">
+              <thead class="bg-white/5 text-gray-400 text-[10px] font-bold uppercase tracking-wider">
+                <tr>
+                  <th class="px-3 py-1.5">Task ID</th>
+                  <th class="px-3 py-1.5">狀態</th>
+                  <th class="px-3 py-1.5">目標 (Objective)</th>
+                  <th class="px-3 py-1.5 text-right">耗時</th>
+                </tr>
+              </thead>
+              <tbody class="divide-y divide-gray-800/40 text-gray-300" id="task-table-body">
+                <tr><td colspan="4" class="px-3 py-2 text-gray-500 text-center">無執行中或歷史任務</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="border-t border-gray-800/60 pt-3">
+          <div class="text-xs font-bold text-gray-400 mb-2">📥 任務即時日誌 (SSE Stream)</div>
+          <pre class="bg-black/60 rounded-xl p-4 text-[11px] font-mono overflow-auto h-48 text-emerald-400 border border-gray-800/40" id="dispatch-result">等待任務發送或即時事件中...</pre>
+        </div>
+      </div>
+
+      <!-- Memory & Drift Monitor -->
+      <div class="glass-card p-6 flex flex-col justify-between">
+        <div class="space-y-4">
+          <div class="flex justify-between items-center">
+            <div>
+              <h3 class="text-lg font-bold text-white">模型輸出偏移監控 (Output Drift Monitor)</h3>
+              <p class="text-xs text-gray-400 mt-0.5">比對生成代碼與黃金標準的 Cosine Similarity</p>
+            </div>
+            <button onclick="runBenchmark()" class="px-3 py-1.5 border border-cyan-600 text-cyan-400 text-xs font-bold rounded-lg hover:bg-cyan-500/10 transition-colors">
+              執行基準評測
+            </button>
+          </div>
+
+          <div class="h-44">
+            <canvas id="driftChart"></canvas>
+          </div>
+
+          <!-- Memory Clear Section -->
+          <div class="border-t border-gray-800/60 pt-4 space-y-3">
+            <div class="flex justify-between items-center">
+              <div>
+                <h4 class="text-sm font-bold text-white">Qdrant 語意向量記憶快取</h4>
+                <p class="text-[11px] text-gray-500">已快取任務點位，滿足 >= 99.9% 時直接繞過 LLM</p>
+              </div>
+              <button onclick="clearMemory()" class="px-3 py-1.5 border border-red-500/30 text-red-400 text-xs font-bold rounded-lg hover:bg-red-500/10 transition-colors">
+                清除全部快取
+              </button>
+            </div>
+            
+            <div class="max-h-36 overflow-auto rounded-xl border border-gray-800/40 text-xs" id="memory-list-container">
+              <table class="w-full text-left">
+                <thead class="bg-white/5 text-gray-400 text-[10px] font-bold uppercase tracking-wider">
+                  <tr>
+                    <th class="px-4 py-2">任務目標 (Objective)</th>
+                    <th class="px-4 py-2 w-28 text-right">TTL 狀態</th>
+                  </tr>
+                </thead>
+                <tbody class="divide-y divide-gray-800/40 text-gray-300" id="memory-table-body">
+                  <tr>
+                    <td colspan="2" class="px-4 py-3 text-center text-gray-500">快取資料載入中...</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- Health table -->
+    <div class="glass-card p-6">
+      <h3 class="text-lg font-bold text-white mb-4">API 端點健康與手動標記控制 (Heartbeat Controls)</h3>
+      <div class="overflow-x-auto rounded-xl border border-gray-800/40">
+        <table class="w-full text-left text-sm">
+          <thead class="bg-white/5 text-gray-400 text-xs font-bold uppercase tracking-wider">
+            <tr>
+              <th class="px-6 py-3">供應商 (Provider)</th>
+              <th class="px-6 py-3">心跳狀態 (Heartbeat)</th>
+              <th class="px-6 py-3">平均延遲 (Avg Latency)</th>
+              <th class="px-6 py-3 text-right">手動降級干預 (Override)</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-gray-800/40" id="health-table-body">
+            <tr>
+              <td colspan="4" class="px-6 py-4 text-center text-gray-500">健康狀態載入中...</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+  </div>
+
+  <script>
+    let latencyChart = null;
+    let tokenChart = null;
+    let driftChart = null;
+
+    // 1. Establish SSE Connection (Module 4)
+    const eventSource = new EventSource('/api/events');
+    const resultBlock = document.getElementById('dispatch-result');
+
+    eventSource.addEventListener('ping', () => {
+      console.log('📡 SSE connected.');
+    });
+
+    eventSource.addEventListener('task-status', (event) => {
+      const data = JSON.parse(event.data);
+      if (data.type === 'start') {
+        resultBlock.innerText = `\n🔄 [SSE ACTIVE] 任務啟動: "${data.objective}"\n正在評估路由與防護機制...\n`;
+      } else if (data.type === 'success') {
+        resultBlock.innerText = `\n🟢 [SSE SUCCESS] 任務順利完成！使用模型: ${data.modelUsed}\n` + resultBlock.innerText;
+        fetchStats();
+      }
+    });
+
+    eventSource.addEventListener('token-record', (event) => {
+      console.log('📡 SSE: Token monitor updated.');
+      fetchStats();
+    });
+
+    eventSource.addEventListener('circuit-breaker', (event) => {
+      const data = JSON.parse(event.data);
+      resultBlock.innerText = `\n🚨 [SSE ALERT] Circuit Breaker Tripped! \n原因: ${data.reason}\n` + resultBlock.innerText;
+      fetchStats();
+    });
+
+    eventSource.addEventListener('model-status-override', (event) => {
+      console.log('📡 SSE: Model override updated.');
+      fetchStats();
+    });
+
+    eventSource.addEventListener('circuit-breaker-reset', (event) => {
+      console.log('📡 SSE: Circuit Breaker cost reset.');
+      fetchStats();
+    });
+
+    // 任務生命週期事件 (P1-B 任務級關聯)
+    eventSource.addEventListener('task-lifecycle', (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        const timeStr = new Date(data.timestamp || Date.now()).toLocaleTimeString();
+        let logLine = `\n⚡ [LIFECYCLE] [${data.status}] ${data.taskId} (${data.type}) - ${timeStr}`;
+        if (data.error) {
+          logLine += `\n   ❌ [${data.error.type}] ${data.error.message}`;
+        }
+        resultBlock.textContent = logLine + "\n" + resultBlock.textContent;
+        fetchTaskList();
+      } catch (e) {
+        console.error("Lifecycle event parsing failed:", e);
+      }
+    });
+
+    async function fetchStats() {
+      const spinner = document.getElementById('refresh-spinner');
+      spinner.classList.remove('hidden');
+      
+      try {
+        const response = await fetch('/api/stats');
+        const data = await response.json();
+        
+        updateDashboard(data);
+      } catch (err) {
+        console.error("Failed to fetch stats:", err.message);
+      } finally {
+        spinner.classList.add('hidden');
+      }
+    }
+
+    function updateDashboard(data) {
+      // 1. Update Key Cards
+      const healthData = data.health || {};
+      const providers = Object.keys(healthData);
+      const activeCount = providers.filter(p => healthData[p].status === 'healthy').length;
+      document.getElementById('active-models-count').innerText = `${activeCount} / ${providers.length}`;
+      
+      const tokenSummary = data.tokensSummary || {};
+      let totalSaved = 0;
+      let totalUsed = 0;
+      let sessionCost = 0;
+
+      Object.keys(tokenSummary).forEach(p => {
+        totalSaved += tokenSummary[p]["省下 Token"] || 0;
+        totalUsed += tokenSummary[p]["已用 Token"] || 0;
+        
+        const costStr = tokenSummary[p]["花費 (USD)"] || "$0.0";
+        const costVal = parseFloat(costStr.replace('$', ''));
+        sessionCost += costVal;
+      });
+      document.getElementById('saved-tokens-text').innerText = totalSaved.toLocaleString();
+      document.getElementById('saved-tokens-desc').innerText = `已成功抵禦 ${totalSaved.toLocaleString()} 額外 Tokens`;
+
+      // Cost render
+      document.getElementById('session-cost-text').innerText = `$${sessionCost.toFixed(6)} USD`;
+
+      // Cache hit ratio estimation
+      const totalHistory = data.tokensHistory || [];
+      const cacheHits = totalHistory.filter(h => h.provider === 'memory-cache').length;
+      const hitRatio = totalHistory.length > 0 ? ((cacheHits / totalHistory.length) * 100).toFixed(0) : '0';
+      document.getElementById('cache-hit-ratio').innerText = `${hitRatio}%`;
+
+      // 2. Render health table with Override buttons
+      const healthBody = document.getElementById('health-table-body');
+      healthBody.innerHTML = '';
+      providers.forEach(p => {
+        const isHealthy = healthData[p].status === 'healthy';
+        const statusHTML = isHealthy 
+          ? `<span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-500/10 text-emerald-400">🟢 Healthy</span>`
+          : `<span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-red-500/10 text-red-400">🔴 Degraded</span>`;
+        
+        const row = document.createElement('tr');
+        row.className = "hover:bg-white/5 transition-colors";
+        row.innerHTML = `
+          <td class="px-6 py-4 font-bold text-white capitalize">${p}</td>
+          <td class="px-6 py-4">${statusHTML}</td>
+          <td class="px-6 py-4 font-mono text-cyan-400 font-bold">${healthData[p].avgLatency ? healthData[p].avgLatency.toFixed(0) + ' ms' : 'N/A'}</td>
+          <td class="px-6 py-4 text-right">
+            <button onclick="overrideModelStatus('${p}', '${isHealthy ? 'degraded' : 'healthy'}')" class="px-3 py-1 bg-white/5 border border-white/10 hover:bg-white/10 text-xs font-bold rounded-lg transition-colors text-gray-300">
+              ${isHealthy ? '⚠️ 標記降級' : '🟢 標記復原'}
+            </button>
+          </td>
+        `;
+        healthBody.appendChild(row);
+      });
+
+      // 3. Render Memory lists
+      const memoryBody = document.getElementById('memory-table-body');
+      memoryBody.innerHTML = '';
+      const cacheItems = data.memoryCache || [];
+      if (cacheItems.length === 0) {
+        memoryBody.innerHTML = `<tr><td colspan="2" class="px-4 py-4 text-center text-gray-500">Qdrant 暫時無快取項目（或尚未連線）</td></tr>`;
+      } else {
+        cacheItems.forEach(item => {
+          const row = document.createElement('tr');
+          row.className = "hover:bg-white/5 transition-colors";
+          row.innerHTML = `
+            <td class="px-4 py-3 font-semibold text-gray-200 truncate max-w-md" title="${item.objective}">${item.objective}</td>
+            <td class="px-4 py-3 text-right text-emerald-400 font-bold font-mono">Active (TTL)</td>
+          `;
+          memoryBody.appendChild(row);
+        });
+      }
+
+      // 4. Draw Latency Chart
+      const latencyLabels = providers;
+      const latencyValues = providers.map(p => healthData[p].avgLatency || 0);
+      renderLatencyChart(latencyLabels, latencyValues);
+
+      // 5. Draw Token Chart
+      const tokenLabels = Object.keys(tokenSummary);
+      const tokenValues = tokenLabels.map(p => tokenSummary[p]["已用 Token"] || 0);
+      renderTokenChart(tokenLabels, tokenValues);
+
+      // 6. Draw Drift Chart
+      const driftStats = data.driftStats || [];
+      renderDriftChart(driftStats);
+    }
+
+    function renderLatencyChart(labels, values) {
+      const ctx = document.getElementById('latencyChart').getContext('2d');
+      if (latencyChart) latencyChart.destroy();
+      
+      latencyChart = new Chart(ctx, {
+        type: 'bar',
+        data: {
+          labels: labels.map(l => l.toUpperCase()),
+          datasets: [{
+            label: '心跳延遲 (ms)',
+            data: values,
+            backgroundColor: 'rgba(6, 182, 212, 0.4)',
+            borderColor: '#06b6d4',
+            borderWidth: 2,
+            borderRadius: 8,
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: { legend: { display: false } },
+          scales: {
+            y: { grid: { color: 'rgba(255, 255, 255, 0.05)' }, ticks: { color: '#9ca3af' } },
+            x: { ticks: { color: '#9ca3af' } }
+          }
+        }
+      });
+    }
+
+    function renderTokenChart(labels, values) {
+      const ctx = document.getElementById('tokenChart').getContext('2d');
+      if (tokenChart) tokenChart.destroy();
+      
+      tokenChart = new Chart(ctx, {
+        type: 'doughnut',
+        data: {
+          labels: labels.map(l => l.toUpperCase()),
+          datasets: [{
+            data: values,
+            backgroundColor: [
+              '#2563eb', // blue
+              '#10b981', // green
+              '#8b5cf6', // purple
+              '#f59e0b'  // yellow
+            ],
+            borderWidth: 0
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: { legend: { display: false } }
+        }
+      });
+    }
+
+    function renderDriftChart(stats) {
+      const ctx = document.getElementById('driftChart').getContext('2d');
+      if (driftChart) driftChart.destroy();
+      
+      const filteredStats = stats.filter(s => s.passed);
+      const labels = filteredStats.map((s, i) => `Case ${i+1}`);
+      const similarities = filteredStats.map(s => s.similarity);
+
+      driftChart = new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels: labels,
+          datasets: [{
+            label: '與黃金標準的語意相似度',
+            data: similarities,
+            borderColor: '#10b981',
+            backgroundColor: 'rgba(16, 185, 129, 0.1)',
+            fill: true,
+            tension: 0.3,
+            borderWidth: 2,
+            pointBackgroundColor: '#10b981',
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: { legend: { display: false } },
+          scales: {
+            y: { min: 0.5, max: 1.0, grid: { color: 'rgba(255, 255, 255, 0.05)' }, ticks: { color: '#9ca3af' } },
+            x: { ticks: { color: '#9ca3af' } }
+          }
+        }
+      });
+    }
+
+    async function dispatchCustomTask() {
+      const objective = document.getElementById('task-objective').value.trim();
+      const constraints = document.getElementById('task-constraints').value.split(',').map(s => s.trim()).filter(Boolean);
+      const selectMode = document.getElementById('task-tier').value;
+      const btn = document.getElementById('dispatch-btn');
+      const spinner = document.getElementById('dispatch-spinner');
+
+      if (!objective) {
+        alert("請輸入任務目標！");
+        return;
+      }
+
+      btn.disabled = true;
+      spinner.classList.remove('hidden');
+      resultBlock.innerText = `🔄 [Task Active] 正在呼叫本地調度器...\n`;
+
+      const payload = { 
+        objective, 
+        constraints, 
+        tier: selectMode === 'race' ? 'high' : selectMode 
+      };
+
+      // If racing mode is chosen, pass race options
+      const isRace = selectMode === 'race';
+
+      try {
+        const res = await fetch('/dispatch', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ 
+            ...payload, 
+            tags: isRace ? ["realtime"] : []
+          })
+        });
+        const data = await res.json();
+        resultBlock.innerText = JSON.stringify(data, null, 2) + "\n" + resultBlock.innerText;
+      } catch (err) {
+        resultBlock.innerText = `執行出錯: ${err.message}\n` + resultBlock.innerText;
+      } finally {
+        btn.disabled = false;
+        spinner.classList.add('hidden');
+      }
+    }
+
+    async function submitAsyncTask() {
+      const objective = document.getElementById('task-objective').value.trim();
+      const constraints = document.getElementById('task-constraints').value.split(',').map(s => s.trim()).filter(Boolean);
+      const selectMode = document.getElementById('task-tier').value;
+      const asyncBtn = document.getElementById('async-btn');
+
+      if (!objective) {
+        alert("請輸入任務目標！");
+        return;
+      }
+
+      asyncBtn.disabled = true;
+      try {
+        const payload = {
+          objective,
+          constraints,
+          tier: selectMode === 'race' ? 'high' : selectMode
+        };
+
+        const res = await fetch('/api/tasks', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+
+        const data = await res.json();
+        if (res.status === 202) {
+          resultBlock.textContent = `⚡ [HTTP 202 ACCEPTED] 任務已成功排入背景隊列！\nTask ID: ${data.taskId}\n狀態: ${data.status}\n` + resultBlock.textContent;
+          fetchTaskList();
+        } else {
+          resultBlock.textContent = `❌ [HTTP ${res.status}] 提交失敗: ${data.error || 'Unknown error'}\n` + resultBlock.textContent;
+        }
+      } catch (err) {
+        resultBlock.textContent = `提交失敗: ${err.message}\n` + resultBlock.textContent;
+      } finally {
+        asyncBtn.disabled = false;
+      }
+    }
+
+    async function fetchTaskList() {
+      try {
+        const res = await fetch('/api/tasks');
+        if (!res.ok) return;
+        const tasks = await res.json();
+        const tbody = document.getElementById('task-table-body');
+        if (!tbody) return;
+
+        // 安全清空並使用 textContent 重新填充
+        tbody.textContent = '';
+
+        if (!tasks || tasks.length === 0) {
+          const tr = document.createElement('tr');
+          const td = document.createElement('td');
+          td.colSpan = 4;
+          td.className = 'px-3 py-2 text-gray-500 text-center';
+          td.textContent = '無執行中或歷史任務';
+          tr.appendChild(td);
+          tbody.appendChild(tr);
+          return;
+        }
+
+        tasks.slice(0, 15).forEach(t => {
+          const tr = document.createElement('tr');
+          tr.className = 'hover:bg-white/5 cursor-pointer transition-colors';
+          tr.onclick = () => loadTaskDetail(t.taskId);
+
+          const tdId = document.createElement('td');
+          tdId.className = 'px-3 py-1.5 font-mono text-[10px] text-cyan-400';
+          tdId.textContent = t.taskId.length > 20 ? t.taskId.slice(0, 18) + '...' : t.taskId;
+
+          const tdStatus = document.createElement('td');
+          tdStatus.className = 'px-3 py-1.5';
+          const spanStatus = document.createElement('span');
+          spanStatus.className = 'px-1.5 py-0.5 rounded text-[10px] font-bold ' + 
+            (t.status === 'COMPLETED' ? 'bg-emerald-500/20 text-emerald-400' :
+             t.status === 'RUNNING' ? 'bg-blue-500/20 text-blue-400 animate-pulse' :
+             t.status === 'FAILED' ? 'bg-red-500/20 text-red-400' : 'bg-gray-500/20 text-gray-400');
+          spanStatus.textContent = t.status;
+          tdStatus.appendChild(spanStatus);
+
+          const tdObj = document.createElement('td');
+          tdObj.className = 'px-3 py-1.5 truncate max-w-[200px] text-gray-300';
+          tdObj.textContent = t.objective;
+
+          const tdDuration = document.createElement('td');
+          tdDuration.className = 'px-3 py-1.5 text-right font-mono text-[10px] text-gray-400';
+          tdDuration.textContent = t.durationMs !== null ? `${t.durationMs}ms` : '--';
+
+          tr.appendChild(tdId);
+          tr.appendChild(tdStatus);
+          tr.appendChild(tdObj);
+          tr.appendChild(tdDuration);
+          tbody.appendChild(tr);
+        });
+      } catch (err) {
+        console.warn('Failed to fetch task list:', err.message);
+      }
+    }
+
+    async function loadTaskDetail(taskId) {
+      try {
+        const res = await fetch(`/api/tasks/${encodeURIComponent(taskId)}`);
+        if (!res.ok) return;
+        const task = await res.json();
+        resultBlock.textContent = `📋 [TASK DETAIL: ${task.taskId}]\n狀態: ${task.status}\n耗時: ${task.durationMs || '--'}ms\n` +
+          (task.data ? `\n✨ [產出結果]:\n${JSON.stringify(task.data, null, 2)}\n` : '') +
+          (task.error ? `\n❌ [錯誤摘要]:\n${JSON.stringify(task.error, null, 2)}\n` : '') +
+          "\n" + resultBlock.textContent;
+      } catch (err) {
+        console.warn('Failed to load task detail:', err.message);
+      }
+    }
+
+    async function runBenchmark() {
+      if (!confirm("基準評測將調用外部 LLM 生成代碼並生成向量嵌入，可能耗時 10~20 秒，確定開始？")) return;
+      
+      resultBlock.innerText = "⏱️ 正在執行基準評測，這將對多個模型進行 Latency 與 Drift 比對...\n" + resultBlock.innerText;
+      
+      try {
+        const res = await fetch('/api/benchmark', { method: 'POST' });
+        const data = await res.json();
+        alert(data.message || "評測完成！");
+        fetchStats();
+      } catch (err) {
+        alert(`評測失敗: ${err.message}`);
+      }
+    }
+
+    async function clearMemory() {
+      if (!confirm("確定要清除所有的 Qdrant 語意快取嗎？")) return;
+      try {
+        const res = await fetch('/api/memory/clear', { method: 'POST' });
+        const data = await res.json();
+        alert(data.message || "快取已清除！");
+        fetchStats();
+      } catch (err) {
+        alert(`清除失敗: ${err.message}`);
+      }
+    }
+
+    async function resetCircuitBreaker() {
+      if (!confirm("確定要手動重置 Session 總費用熔斷器嗎？")) return;
+      try {
+        const res = await fetch('/api/circuit-breaker/toggle', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'reset' })
+        });
+        const data = await res.json();
+        alert(data.message || "熔斷器費用已重置！");
+        fetchStats();
+      } catch (err) {
+        alert(`重置失敗: ${err.message}`);
+      }
+    }
+
+    async function overrideModelStatus(provider, status) {
+      try {
+        const res = await fetch('/api/models/override-status', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ provider, status })
+        });
+        const data = await res.json();
+        console.log(data.message);
+        fetchStats();
+      } catch (err) {
+        alert(`覆寫失敗: ${err.message}`);
+      }
+    }
+
+    // Init load
+    fetchStats();
+    fetchTaskList();
+  </script>
+</body>
+</html>
