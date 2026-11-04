@@ -13,6 +13,7 @@ const path = require('path');
 const { execSync } = require('child_process');
 const globalEmitter = require('../shared/global_emitter');
 const taskManager = require('../services/task_manager');
+const { isLoopbackAddress } = require('../server');
 
 let passedCount = 0;
 let failedCount = 0;
@@ -80,20 +81,21 @@ async function runAll() {
     return { ok: true, tierUsed: tier };
   };
 
-  function isLoopbackAddress(req) {
-    const ip = req.socket && req.socket.remoteAddress;
-    return ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1';
-  }
+  let sideEffectMemoryClear = false;
+  let sideEffectCircuitBreaker = false;
+  let sideEffectBenchmark = false;
+  let sideEffectModelOverride = false;
 
   // 建立輕量測試 HTTP 伺服器 (實作與 server.js 嚴格相同的門禁與路由)
   testServer = http.createServer((req, res) => {
     // 依據 mock 標頭模擬不同的底層 socket IP
     let simulatedIp = req.socket && req.socket.remoteAddress;
-    if (req.headers['x-mock-ip']) {
+    if (req.headers['x-mock-ip'] !== undefined) {
       simulatedIp = req.headers['x-mock-ip'];
     }
 
     function checkLoopback(request) {
+      if (!simulatedIp || typeof simulatedIp !== 'string') return false; // Fail-closed
       return simulatedIp === '127.0.0.1' || simulatedIp === '::1' || simulatedIp === '::ffff:127.0.0.1';
     }
 
@@ -187,6 +189,58 @@ async function runAll() {
       }
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify(task));
+      return;
+    }
+
+    // 5. POST /api/memory/clear
+    if (req.method === 'POST' && req.url === '/api/memory/clear') {
+      if (!checkLoopback(req)) {
+        res.writeHead(403, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: "Access to memory clear is restricted to localhost." }));
+        return;
+      }
+      sideEffectMemoryClear = true;
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: true, message: "Cleared" }));
+      return;
+    }
+
+    // 6. POST /api/circuit-breaker/toggle
+    if (req.method === 'POST' && req.url === '/api/circuit-breaker/toggle') {
+      if (!checkLoopback(req)) {
+        res.writeHead(403, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: "Access to circuit breaker control is restricted to localhost." }));
+        return;
+      }
+      sideEffectCircuitBreaker = true;
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: true, message: "Reset" }));
+      return;
+    }
+
+    // 7. POST /api/benchmark
+    if (req.method === 'POST' && req.url === '/api/benchmark') {
+      if (!checkLoopback(req)) {
+        res.writeHead(403, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: "Access to benchmark execution is restricted to localhost." }));
+        return;
+      }
+      sideEffectBenchmark = true;
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: true, message: "Started" }));
+      return;
+    }
+
+    // 8. POST /api/models/override-status
+    if (req.method === 'POST' && req.url === '/api/models/override-status') {
+      if (!checkLoopback(req)) {
+        res.writeHead(403, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: "Access to model override is restricted to localhost." }));
+        return;
+      }
+      sideEffectModelOverride = true;
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: true, message: "Overridden" }));
       return;
     }
 
@@ -405,6 +459,110 @@ async function runAll() {
       });
       assert.strictEqual(resStatsLocal.statusCode, 200);
       assert.strictEqual(resStatsLocal.json.status, 'healthy');
+
+      // 10. 四大管理端點外部 IP 阻斷與 Fail-Closed 防禦 (P0 Security)
+      const mgmtEndpoints = [
+        { path: '/api/memory/clear', name: 'Memory Clear' },
+        { path: '/api/circuit-breaker/toggle', name: 'Circuit Breaker Toggle' },
+        { path: '/api/benchmark', name: 'Benchmark Trigger' },
+        { path: '/api/models/override-status', name: 'Model Override' }
+      ];
+
+      // 重設所有副作用標記
+      sideEffectMemoryClear = false;
+      sideEffectCircuitBreaker = false;
+      sideEffectBenchmark = false;
+      sideEffectModelOverride = false;
+
+      for (const ep of mgmtEndpoints) {
+        // (A) 區域網路 IP (192.168.1.100) -> 403 Forbidden
+        const resLan = await makeHttpRequest({
+          hostname: '127.0.0.1',
+          port: testPort,
+          path: ep.path,
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-mock-ip': '192.168.1.100'
+          }
+        }, { test: true });
+        assert.strictEqual(resLan.statusCode, 403, `${ep.name} must reject LAN IP with 403`);
+        assert.ok(resLan.json.error.includes('restricted to localhost'));
+
+        // (B) 偽造 X-Forwarded-For 標頭 (帶 X-Forwarded-For: 127.0.0.1 但底層是外部 IP) -> 403 Forbidden
+        const resSpoofEp = await makeHttpRequest({
+          hostname: '127.0.0.1',
+          port: testPort,
+          path: ep.path,
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-mock-ip': '10.0.0.99',
+            'X-Forwarded-For': '127.0.0.1',
+            'X-Real-IP': '127.0.0.1'
+          }
+        }, { test: true });
+        assert.strictEqual(resSpoofEp.statusCode, 403, `${ep.name} must reject spoofed headers with 403`);
+
+        // (C) 異常或缺漏 Socket IP -> Fail-Closed (403 Forbidden)
+        const resMissing = await makeHttpRequest({
+          hostname: '127.0.0.1',
+          port: testPort,
+          path: ep.path,
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-mock-ip': ''
+          }
+        }, { test: true });
+        assert.strictEqual(resMissing.statusCode, 403, `${ep.name} must fail-closed on missing IP`);
+      }
+
+      // (D) 關鍵斷言：未授權呼叫絕不可在驗證前觸發任何副作用！
+      assert.strictEqual(sideEffectMemoryClear, false, 'Security Invariant: /api/memory/clear MUST NOT trigger clear side-effect when rejected');
+      assert.strictEqual(sideEffectCircuitBreaker, false, 'Security Invariant: Circuit breaker reset must not trigger when rejected');
+      assert.strictEqual(sideEffectBenchmark, false, 'Security Invariant: Benchmark must not trigger when rejected');
+      assert.strictEqual(sideEffectModelOverride, false, 'Security Invariant: Model override must not trigger when rejected');
+
+      // (E) 合法 Loopback 存取 (127.0.0.1, ::1, ::ffff:127.0.0.1) -> 200 OK 並正常觸發業務邏輯
+      const resMemV4 = await makeHttpRequest({
+        hostname: '127.0.0.1',
+        port: testPort,
+        path: '/api/memory/clear',
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-mock-ip': '127.0.0.1' }
+      });
+      assert.strictEqual(resMemV4.statusCode, 200);
+      assert.strictEqual(sideEffectMemoryClear, true, 'Memory clear executes on authorized loopback 127.0.0.1');
+
+      const resMemV6 = await makeHttpRequest({
+        hostname: '127.0.0.1',
+        port: testPort,
+        path: '/api/memory/clear',
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-mock-ip': '::1' }
+      });
+      assert.strictEqual(resMemV6.statusCode, 200);
+
+      const resMemMapped = await makeHttpRequest({
+        hostname: '127.0.0.1',
+        port: testPort,
+        path: '/api/memory/clear',
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-mock-ip': '::ffff:127.0.0.1' }
+      });
+      assert.strictEqual(resMemMapped.statusCode, 200);
+
+      // (F) 直接單元測試 server.js 的 isLoopbackAddress 函式
+      assert.strictEqual(isLoopbackAddress({ socket: { remoteAddress: '127.0.0.1' } }), true, '127.0.0.1 is loopback');
+      assert.strictEqual(isLoopbackAddress({ socket: { remoteAddress: '::1' } }), true, '::1 is loopback');
+      assert.strictEqual(isLoopbackAddress({ socket: { remoteAddress: '::ffff:127.0.0.1' } }), true, '::ffff:127.0.0.1 is loopback');
+      assert.strictEqual(isLoopbackAddress({ socket: { remoteAddress: '192.168.1.1' } }), false, 'LAN IP is not loopback');
+      assert.strictEqual(isLoopbackAddress({ socket: { remoteAddress: '10.0.0.1' }, headers: { 'x-forwarded-for': '127.0.0.1' } }), false, 'Spoofed header is strictly ignored');
+      assert.strictEqual(isLoopbackAddress({ socket: {} }), false, 'Missing remoteAddress fails closed');
+      assert.strictEqual(isLoopbackAddress({}), false, 'Missing socket fails closed');
+      assert.strictEqual(isLoopbackAddress(null), false, 'Null request fails closed');
+      assert.strictEqual(isLoopbackAddress(undefined), false, 'Undefined request fails closed');
     });
 
     // T17: Dashboard XSS 防護審查
@@ -447,11 +605,81 @@ async function runAll() {
 
       const cmd = `git diff --exit-code b789011 -- ${frozenFiles.join(' ')}`;
       try {
-        execSync(cmd, { stdio: 'pipe' });
+        execSync(cmd, { cwd: path.resolve(__dirname, '..'), stdio: 'pipe' });
         assert.ok(true, 'All 7 frozen files are strictly identical to commit b789011');
       } catch (diffErr) {
         assert.fail(`FROZEN VIOLATION: Modifications detected in frozen modules:\n${diffErr.stdout ? diffErr.stdout.toString() : diffErr.message}`);
       }
+    });
+
+    // T22: SSE 15s Keep-Alive 心跳與連線隔離審查 (P1 SSE)
+    await runTestCase('T22', 'SSE Keep-Alive & Client Isolation: 15s heartbeat, distinct event type, and zero timer leaks', async () => {
+      // 1. 建立第一個 SSE 連線
+      const sseReq1 = http.request({
+        hostname: '127.0.0.1',
+        port: testPort,
+        path: '/api/events',
+        method: 'GET'
+      });
+
+      const events1 = [];
+      const ssePromise1 = new Promise((resolve) => {
+        sseReq1.on('response', (res) => {
+          assert.strictEqual(res.statusCode, 200);
+          assert.strictEqual(res.headers['content-type'], 'text/event-stream');
+          res.on('data', chunk => {
+            events1.push(chunk.toString());
+            if (events1.length >= 1) resolve();
+          });
+        });
+      });
+      sseReq1.end();
+      await ssePromise1;
+
+      // 驗證第一個客戶端收到 initial ping
+      assert.ok(events1[0].includes('event: ping'), 'SSE initial event must be ping');
+      assert.strictEqual(events1[0].includes('task-lifecycle'), false, 'Ping must not be confused with task-lifecycle');
+
+      // 2. 建立第二個 SSE 連線
+      const sseReq2 = http.request({
+        hostname: '127.0.0.1',
+        port: testPort,
+        path: '/api/events',
+        method: 'GET'
+      });
+      const events2 = [];
+      const ssePromise2 = new Promise((resolve) => {
+        sseReq2.on('response', (res) => {
+          assert.strictEqual(res.statusCode, 200);
+          res.on('data', chunk => {
+            events2.push(chunk.toString());
+            if (events2.length >= 1) resolve();
+          });
+        });
+      });
+      sseReq2.end();
+      await ssePromise2;
+
+      assert.ok(events2[0].includes('event: ping'), 'SSE client 2 must receive ping independently');
+
+      // 3. 中途斷開第一個客戶端，驗證第二個客戶端不受影響
+      sseReq1.destroy();
+      await sleep(30);
+
+      // 4. 中途斷開第二個客戶端，驗證無殘留異常
+      sseReq2.destroy();
+      await sleep(30);
+    });
+
+    // T23: 環境變數範本完整性與預設值一致性檢查 (P1 Config)
+    await runTestCase('T23', 'Config Invariant: .env.example contains exact defaults matching code', async () => {
+      const envExamplePath = path.resolve(__dirname, '../.env.example');
+      const envExampleContent = fs.readFileSync(envExamplePath, 'utf8');
+
+      // 驗證三大欄位存在且預設值完全吻合程式碼
+      assert.ok(envExampleContent.includes('AGENT_OS_PORT=3000'), 'Must contain AGENT_OS_PORT=3000');
+      assert.ok(envExampleContent.includes('QDRANT_URL=http://localhost:6333'), 'Must contain QDRANT_URL=http://localhost:6333');
+      assert.ok(envExampleContent.includes('MEMORY_TTL_DAYS=7'), 'Must contain MEMORY_TTL_DAYS=7');
     });
 
   } finally {

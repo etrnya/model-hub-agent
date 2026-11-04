@@ -14,6 +14,30 @@ const PORT = process.env.AGENT_OS_PORT || 3000;
 // SSE Client pool and emitter integration
 const globalEmitter = require('./shared/global_emitter');
 let sseClients = [];
+let sseKeepAliveTimer = null;
+
+function ensureKeepAliveTimer() {
+  if (!sseKeepAliveTimer && sseClients.length > 0) {
+    sseKeepAliveTimer = setInterval(() => {
+      if (sseClients.length === 0) {
+        clearInterval(sseKeepAliveTimer);
+        sseKeepAliveTimer = null;
+        return;
+      }
+      broadcastEvent('ping', { time: Date.now() });
+    }, 15000);
+    if (sseKeepAliveTimer.unref) {
+      sseKeepAliveTimer.unref();
+    }
+  }
+}
+
+function cleanupKeepAliveTimer() {
+  if (sseClients.length === 0 && sseKeepAliveTimer) {
+    clearInterval(sseKeepAliveTimer);
+    sseKeepAliveTimer = null;
+  }
+}
 
 function broadcastEvent(eventType, eventData) {
   const packet = `event: ${eventType}\ndata: ${JSON.stringify(eventData)}\n\n`;
@@ -23,6 +47,7 @@ function broadcastEvent(eventType, eventData) {
     } catch (err) {
       // Remove stale client
       sseClients = sseClients.filter(c => c !== client);
+      cleanupKeepAliveTimer();
     }
   });
 }
@@ -34,7 +59,8 @@ globalEmitter.on('task-lifecycle', (data) => broadcastEvent('task-lifecycle', da
 
 // 本機存取保護檢查 (Localhost-Only Access Guard)
 function isLoopbackAddress(req) {
-  const ip = req.socket && req.socket.remoteAddress;
+  const ip = req && req.socket && req.socket.remoteAddress;
+  if (!ip || typeof ip !== 'string') return false; // Fail-Closed on missing or abnormal socket IP
   return ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1';
 }
 
@@ -132,10 +158,12 @@ const server = http.createServer(async (req, res) => {
       'Access-Control-Allow-Origin': '*'
     });
     sseClients.push(res);
+    ensureKeepAliveTimer();
     console.log(`📡 [Server] SSE Client connected. (Total: ${sseClients.length})`);
     
     req.on('close', () => {
       sseClients = sseClients.filter(client => client !== res);
+      cleanupKeepAliveTimer();
       console.log(`📡 [Server] SSE Client disconnected. (Total: ${sseClients.length})`);
     });
 
@@ -273,6 +301,11 @@ const server = http.createServer(async (req, res) => {
 
   // API Override Model Status
   if (req.method === 'POST' && req.url === '/api/models/override-status') {
+    if (!isLoopbackAddress(req)) {
+      res.writeHead(403, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: "Access to model override is restricted to localhost." }));
+      return;
+    }
     let body = '';
     req.on('data', chunk => body += chunk.toString());
     req.on('end', () => {
@@ -300,6 +333,11 @@ const server = http.createServer(async (req, res) => {
 
   // API Toggle / Reset Circuit Breaker
   if (req.method === 'POST' && req.url === '/api/circuit-breaker/toggle') {
+    if (!isLoopbackAddress(req)) {
+      res.writeHead(403, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: "Access to circuit breaker control is restricted to localhost." }));
+      return;
+    }
     let body = '';
     req.on('data', chunk => body += chunk.toString());
     req.on('end', () => {
@@ -325,6 +363,11 @@ const server = http.createServer(async (req, res) => {
 
   // API Trigger Benchmark
   if (req.method === 'POST' && req.url === '/api/benchmark') {
+    if (!isLoopbackAddress(req)) {
+      res.writeHead(403, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: "Access to benchmark execution is restricted to localhost." }));
+      return;
+    }
     res.writeHead(200, { 'Content-Type': 'application/json' });
     
     // Run benchmark in background asynchronously
@@ -338,6 +381,11 @@ const server = http.createServer(async (req, res) => {
 
   // API Clear Vector Memory Cache
   if (req.method === 'POST' && req.url === '/api/memory/clear') {
+    if (!isLoopbackAddress(req)) {
+      res.writeHead(403, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: "Access to memory clear is restricted to localhost." }));
+      return;
+    }
     res.writeHead(200, { 'Content-Type': 'application/json' });
     try {
       const qdrantUrl = process.env.QDRANT_URL || 'http://localhost:6333';
@@ -438,11 +486,20 @@ const server = http.createServer(async (req, res) => {
   res.end(JSON.stringify({ error: "Endpoint not found" }));
 });
 
-server.listen(PORT, () => {
-  console.log("\n" + "=".repeat(50));
-  console.log(`🚀 Antigravity Agent OS Webhook & Observability Dashboard online!`);
-  console.log(`📡 Listening on: http://localhost:${PORT}`);
-  console.log(`👉 Visit http://localhost:${PORT}/dashboard to open the console UI`);
-  console.log(`👉 POST http://localhost:${PORT}/dispatch to trigger OS workflow`);
-  console.log("=".repeat(50) + "\n");
-});
+if (require.main === module) {
+  server.listen(PORT, () => {
+    console.log("\n" + "=".repeat(50));
+    console.log(`🚀 Antigravity Agent OS Webhook & Observability Dashboard online!`);
+    console.log(`📡 Listening on: http://localhost:${PORT}`);
+    console.log(`👉 Visit http://localhost:${PORT}/dashboard to open the console UI`);
+    console.log(`👉 POST http://localhost:${PORT}/dispatch to trigger OS workflow`);
+    console.log("=".repeat(50) + "\n");
+  });
+}
+
+module.exports = {
+  server,
+  isLoopbackAddress,
+  ensureKeepAliveTimer,
+  cleanupKeepAliveTimer
+};
