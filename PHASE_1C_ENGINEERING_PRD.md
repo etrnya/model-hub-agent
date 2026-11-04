@@ -8,7 +8,7 @@
 **目標發布**：`v1.5.0-phase-1c-codegraph`  
 **負責架構師**：Antigravity Agent OS 核心架構組 (etrnya)  
 **制定日期**：2026-11-04  
-**狀態**：APPROVED & UNDER IMPLEMENTATION  
+**狀態**：REVIEWED / P1-C1 AUTHORIZED (P1-C2~C4 PENDING)  
 
 ---
 
@@ -40,10 +40,12 @@ graph TD
 
     subgraph "P1-C New Modules"
         CGA[CodeGraphAdapter (infrastructure/adapters/codegraph_adapter.js)]
-        RCP[RoleAwareContextPlanner (services/context_planner.js)]
-        CC[ContextCompiler (services/context_compiler.js)]
+        CGS[CodeGraphSchemas (infrastructure/adapters/codegraph_schemas.js)]
+        RCP[RoleAwareContextPlanner (services/context_planner.js - PENDING)]
+        CC[ContextCompiler (services/context_compiler.js - PENDING)]
     end
 
+    CGA --> CGS
     TM -->|1. Submit Task| RCP
     RM -.->|Role Definition| RCP
     RCP -->|2. Plan Query| CGA
@@ -62,122 +64,149 @@ graph TD
    - 負責有限併發任務排隊（`MAX_CONCURRENCY=2`, `MAX_QUEUE=10`）與生命週期 SSE 廣播。
    - 現況：`submitTask(userInput)` 僅被動接收 `userInput.code_context`；若使用者未提供，則 `taskPayload.code_context` 為空。
 3. **`CodeGraphAdapter` (`infrastructure/adapters/codegraph_adapter.js`)**：
-   - 現狀程式碼量 237 行，已封裝基礎 `codegraph` CLI 指令：`findSymbol`、`findCallers`、`getFeatureContext`、`_readCodeSnippet`。
-   - 痛點：
-     - 未支援新版 `codegraph impact <symbol> --json` 分析。
-     - 符號抽取僅依賴粗暴的正規表示式篩選，缺乏角色導向。
-     - 缺乏 Token 預算控制，可能產生過長 Markdown。
-     - 缺乏離線單元測試與 Mock 機制，無法納入全域 CI 迴歸。
+   - 現狀程式碼量 237 行，已封裝基礎 `codegraph` CLI 指令。
+   - 初審發現的重大痛點與安全盲點：
+     - 使用 `child_process.exec()` 命令字串拼接，有 Shell 注入風險。
+     - 檔案片段讀取缺乏路徑穿越檢查、符號連結逃逸防範、黑名單檔案攔截、行數與大小上限限制。
+     - 缺乏 JSON Schema 實體校驗，可能因 CLI 回傳欄位變更導致未攔截例外。
+     - 缺乏狀態機管理與併發同步保護。
+     - 缺乏確定性單元 Mock 與合約測試覆蓋。
 
 ---
 
-## 🧩 二、 模組介面與依賴關係 (Interfaces & Dependencies)
+## 🧩 二、 模組介面與生命週期 (Interfaces & Lifecycle)
 
-### 1. `CodeGraphAdapter` (底層 AST 與圖譜適配器)
+### 1. `CodeGraphAdapter` (加固版適配器規範)
 ```typescript
 interface CodeGraphAdapter {
-  // 索引健康與同步
-  syncIndex(): Promise<{ success: boolean; modifiedCount: number }>;
+  // 索引健康與生命週期同步
+  syncIndex(): Promise<{ success: boolean; modifiedCount: number; status: string }>;
   getStatus(): Promise<CodeGraphStatus>;
 
-  // 符號與圖譜查詢 (直接對齊 codegraph CLI JSON 輸出)
+  // 符號與圖譜查詢 (直接對齊 codegraph CLI JSON 輸出，含 Schema 驗證)
   querySymbols(query: string, options?: { limit?: number; kind?: string }): Promise<Array<CodeGraphNode>>;
-  findCallers(symbol: string, depth?: number): Promise<Array<CallerRelation>>;
-  findCallees(symbol: string, depth?: number): Promise<Array<CalleeRelation>>;
+  findCallers(symbol: string, depth?: number): Promise<CallerRelationResult>;
+  findCallees(symbol: string, depth?: number): Promise<CalleeRelationResult>;
   analyzeImpact(symbol: string, depth?: number): Promise<ImpactAnalysisResult>;
 
-  // 物理程式碼片段安全讀取 (嚴格沙盒限制)
-  readCodeSnippet(filePath: string, startLine: number, endLine: number): Promise<string>;
+  // 物理程式碼片段安全讀取 (嚴格沙盒限制，包含雙重雜湊與真實路徑解析)
+  readCodeSnippet(filePath: string, startLine: number, endLine: number): Promise<{
+    content: string;
+    lineCount: number;
+    fileSha256: string;
+    snippetSha256: string;
+  }>;
 }
 ```
 
-### 2. `RoleAwareContextPlanner` (角色導向檢索規劃器)
-```typescript
-interface RoleAwareContextPlanner {
-  /**
-   * 依據角色定義與任務目標，規劃專屬的檢索請求集合
-   */
-  plan(roleId: string | null, taskPayload: TaskPayload): RetrievalPlan;
-}
+### 2. 索引同步生命週期 (Index Lifecycle State Machine)
+`CodeGraphAdapter` 內部維護確定性狀態機：
+```
+[IDLE] ──(syncIndex start)──> [SYNCING] ──(success)──> [READY]
+                                  │
+                              (failure)
+                                  ↓
+                             [DEGRADED] (保留前一份有效狀態，不阻斷外部呼叫)
+```
+- **併發防禦**：若 `syncIndex()` 執行中被重複呼叫，適配器會返回當前進行中的同一 Promise，避免並發執行多重 CLI 造成 SQLite 寫入衝突。
+- **降級容錯**：若同步失敗，狀態切換為 `DEGRADED`，保留記憶體中的最後一次成功快照，向外報告錯誤日誌但不中斷 Agent OS 運作。
 
-interface RetrievalPlan {
-  roleId: string | null;
-  policy: 'ARCHITECTURE_TOPOLOGY' | 'BLAST_RADIUS_AND_CALLERS' | 'INTERFACE_AND_DOCSTRINGS' | 'BALANCED_SYMBOLS';
-  targetSymbols: Array<string>;
-  traversalDepth: number;
-  includeSnippets: boolean;
-  maxTokens: number;
+---
+
+## 📊 三、 CodeGraph 資料模型與 Schema (Data Models & Schemas)
+
+在 `infrastructure/adapters/codegraph_schemas.js` 中明確定義並斷言以下五大 Schema：
+
+### 1. `CodeGraphNodeSchema` (語法樹節點)
+```typescript
+interface CodeGraphNode {
+  id: string;               // 節點唯一識別碼 (kind:hash)
+  name: string;             // 符號名稱
+  qualifiedName: string;    // 完整限定名稱 (e.g. TaskManager::_pumpQueue)
+  kind: 'function' | 'method' | 'class' | 'variable' | 'interface' | 'file';
+  filePath: string;         // 相對於專案根目錄之路徑
+  language: string;         // 語言類型
+  startLine: number;        // 起始行 (>= 1)
+  endLine: number;          // 結束行 (>= startLine)
+  signature?: string;       // 簽章
+  docstring?: string;       // 文檔註解
+  isExported?: boolean;     // 是否導出
+  isAsync?: boolean;        // 是否非同步
 }
 ```
 
-### 3. `ContextCompiler` (上下文編譯與預算守護器)
+### 2. `CallerRelationSchema` & `CalleeRelationSchema`
 ```typescript
-interface ContextCompiler {
-  /**
-   * 將圖譜節點、呼叫關係與程式碼片段編譯為結構化 Markdown，並嚴格限制於 Token 預算內
-   */
-  compile(plan: RetrievalPlan, rawData: RawRetrievalData): CompiledContextResult;
+interface CallerRelationResult {
+  symbol: string;
+  callers: Array<{
+    name: string;
+    qualifiedName?: string;
+    filePath: string;
+    startLine: number;
+    endLine: number;
+    kind?: string;
+  }>;
 }
 
-interface CompiledContextResult {
-  markdown: string;
-  tokenCountEstimate: number;
-  provenance: Array<SourceEvidence>;
-  truncated: boolean;
+interface CalleeRelationResult {
+  symbol: string;
+  callees: Array<{
+    name: string;
+    qualifiedName?: string;
+    filePath: string;
+    startLine: number;
+    endLine: number;
+    kind?: string;
+  }>;
+}
+```
+
+### 3. `ImpactAnalysisSchema` (衝擊分析)
+```typescript
+interface ImpactAnalysisResult {
+  symbol: string;
+  depth: number;
+  nodeCount: number;
+  edgeCount: number;
+  blastRadius: 'LOW' | 'MEDIUM' | 'HIGH';
+  affected: Array<{
+    name: string;
+    kind: string;
+    filePath: string;
+    startLine: number;
+  }>;
+}
+```
+
+### 4. `CodeGraphStatusSchema` (索引庫狀態)
+```typescript
+interface CodeGraphStatus {
+  nodeCount: number;
+  edgeCount: number;
+  fileCount: number;
+  status: string;
+  dbPath?: string;
+  version?: string;
+}
+```
+
+### 5. `SourceEvidence` (物理證據鏈與雙重雜湊)
+```typescript
+interface SourceEvidence {
+  symbol: string;
+  filePath: string;
+  lineRange: [number, number];
+  fileSha256: string;       // 來源檔案全文雜湊
+  snippetSha256: string;    // 實際擷取程式碼片段雜湊
+  verifiedInIndex: boolean; // 是否在 AST 索引中精確存在
+  indexGeneratedAt: string; // 索引生成時間戳記
 }
 ```
 
 ---
 
-## 📊 三、 CodeGraph 資料模型 (Data Models)
-
-### 1. `CodeGraphNode` (語法樹節點)
-```json
-{
-  "id": "class:961ecca9c26a310951a07c5496c14391",
-  "kind": "class",
-  "name": "TaskManager",
-  "qualifiedName": "TaskManager",
-  "filePath": "services/task_manager.js",
-  "language": "javascript",
-  "startLine": 22,
-  "endLine": 344,
-  "signature": "(options = {})",
-  "docstring": "受限非同步任務管理器 (Bounded In-Memory Asynchronous Task Manager)",
-  "isExported": true,
-  "isAsync": false
-}
-```
-
-### 2. `ImpactAnalysisResult` (影響力與爆炸半徑)
-```json
-{
-  "symbol": "TaskManager",
-  "depth": 2,
-  "nodeCount": 16,
-  "edgeCount": 16,
-  "blastRadius": "HIGH",
-  "affected": [
-    { "name": "server.js", "kind": "file", "filePath": "server.js", "startLine": 1 },
-    { "name": "runAll", "kind": "function", "filePath": "tests/test_async_task_integration.js", "startLine": 57 }
-  ]
-}
-```
-
-### 3. `SourceEvidence` (物理證據鏈)
-```json
-{
-  "symbol": "TaskManager::_pumpQueue",
-  "filePath": "services/task_manager.js",
-  "lineRange": [194, 208],
-  "verifiedInIndex": true,
-  "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-}
-```
-
----
-
-## 🎭 四、 Role-Aware Context Retrieval 設計 (角色檢索矩陣)
+## 🎭 四、 Role-Aware Context Retrieval 設計 (角色檢索矩陣 - 規劃於 P1-C3)
 
 不同角色在系統開發中承擔不同的認知任務，必須配置完全正交的上下文擷取策略：
 
@@ -209,7 +238,7 @@ interface CompiledContextResult {
 
 ---
 
-## 🔄 五、 Task-Aware Dynamic Retrieval 設計 (任務生命週期連動)
+## 🔄 五、 Task-Aware Dynamic Retrieval 設計 (任務生命週期連動 - 規劃於 P1-C4)
 
 ```mermaid
 sequenceDiagram
@@ -240,92 +269,110 @@ sequenceDiagram
     end
 ```
 
-### 動態擴展規則：
-1. **初次派發 (Pre-Dispatch)**：提取目標符號，依據角色限制在深度 `depth=1`，Token 預算限制在 2,000 tokens 以內。
-2. **自我修正觸發 (Self-Correction Triggered)**：
-   - 當 `VerificationGate` 拋出 `VERIFICATION_CONTENT_FAIL`（如偵測到呼叫參數不符或呼叫了不存在的函式）。
-   - 提取審計報告中的報錯符號，動態將檢索深度擴展至 `depth=2~3`，並注入受影響呼叫端的完整原始碼片段（上限擴增至 4,000 tokens），為第二輪修復提供決定性證據。
-
 ---
 
-## 🗜️ 六、 Context Compiler 與 Token 預算控制 (Context Compiler)
+## 🗜️ 六、 Context Compiler 與 Token 預算控制 (規劃於 P1-C3)
 
 為了防止上下文無限膨脹擊穿模型視窗，`ContextCompiler` 實作兩道防線：
 
 ### 1. 相關性評分公式 (Relevance Scoring)
 $$\text{Score}(N) = 0.4 \times \text{ExactMatch} + 0.3 \times \frac{1}{\text{Depth} + 1} + 0.3 \times \text{RoleWeight}(N)$$
 
-* `ExactMatch`：任務目標中完全命中符號名稱為 1.0，模糊匹配為 0.5。
-* `Depth`：距離目標符號之呼叫層級（0 = 目標本身, 1 = 直接 Caller/Callee）。
-* `RoleWeight`：與角色策略的適配度（例如 `code_reviewer` 對 `ImpactNode` 賦予 1.0）。
-
 ### 2. 硬上限截斷與降級階梯 (Budget Guard & Fallback)
 * 預設預算：`MAX_CODE_CONTEXT_TOKENS = 3000` (約 12,000 字元)。
-* 超過預算時的降級優先順序：
-  1. 優先保留：目標符號簽章、檔案路徑與行號。
-  2. 次要保留：直接 Callers/Callees 拓撲清單。
-  3. 優先截斷：下游模組之詳細原始碼實作內容（降級為 `// [Implementation truncated for budget: 45 lines]`）。
-  4. 注入提示：`⚠️ [Context Notice]: 3 peripheral code snippets were truncated due to token budget constraint.`。
+* 降級優先級：保留目標簽章與主要 Callers，截斷邊緣實作內容。
 
 ---
 
-## 🛡️ 七、 資安威脅模型與沙盒邊界 (Security Threat Model)
+## 🛡️ 七、 資安威脅模型與防禦規範 (Security & Hardening Specifications)
 
-| 威脅代號 | 威脅描述 (Threat) | 攻擊途徑 (Attack Vector) | 核心防禦措施 (Mitigation) |
-| :--- | :--- | :--- | :--- |
-| **STRIDE-T1** | **路徑穿越 (Path Traversal)** | 惡意任務目標傳入 `../../etc/passwd` 或 Windows `..\..\Windows` 試圖讀取系統檔。 | 嚴格使用 `path.resolve` 比對，目標路徑必須以 `projectPath` 為前綴；禁止讀取 `.git/` 與 `.env`。 |
-| **STRIDE-T2** | **指令注入 (Command Injection)** | 符號中夾帶 `; rm -rf /` 或 `& calc.exe` 注入至 `codegraph` CLI。 | 符號名稱強制執行白名單正規表達式：`^[a-zA-Z0-9_:.\\-]+$`；特殊字元直接剝離拒絕。 |
-| **STRIDE-T3** | **任意代碼執行 (Code Execution)** | 在檢索過程中對專案檔案進行 `eval()` 或動態 `require()`。 | **嚴格禁止**動態載入被檢索的程式碼；僅透過 SQLite 與唯讀文字串流解析 AST。 |
-| **STRIDE-T4** | **機密資訊外流 (Secret Leak)** | 程式碼片段中含有本機 API Key 或密鑰，直接洩漏至 Prompt。 | 與既有 `GuardrailManager` 整合，所有提取的 Snippet 輸出前強制經過 DLP 敏感資訊脫敏過濾。 |
+依據初審裁決要求，本階段落實五項關鍵安全防衛規範：
+
+### 1. 路徑穿越與符號連結逃逸防護 (Path Traversal & Symlink Defense)
+- **禁止單純前綴比對**：嚴格禁止 `targetPath.startsWith(projectRoot)`，防範 `/app/project-secret/.env` 偽前綴攻擊。
+- **路徑標準化判定演算法**：
+  ```javascript
+  const resolvedPath = path.resolve(this.projectPath, filePath);
+  const relative = path.relative(this.projectPath, resolvedPath);
+  const isInside = relative !== '' && !relative.startsWith('..') && !path.isAbsolute(relative);
+  if (!isInside) {
+    throw new CodeGraphSecurityError('PATH_TRAVERSAL_DETECTED', `Path ${filePath} is outside project root`);
+  }
+  ```
+- **Symlink 解析**：在讀取前使用 `fs.realpath` 解析符號連結目標真實路徑，並對真實路徑再次執行 `path.relative` 判定，徹底防止專案內 symlink 指向專案外敏感資源。
+- **黑名單路徑攔截**：
+  - 封鎖路徑包含：`.git/`, `.git\\`, `.env`, `node_modules/` (視配置), `id_rsa`, `id_ed25519`。
+  - 封鎖副檔名：`*.pem`, `*.key`, `*.pfx`, `*.crt`, `*.p12`。
+- **程式碼讀取配額與防護**：
+  - `startLine >= 1`, `endLine >= startLine`。
+  - 單次讀取上限：最多 500 行 (`endLine - startLine + 1 <= 500`)。
+  - 檔案大小上限：單檔最大 1MB (`stat.size <= 1024 * 1024`)。
+  - 二進位檔案防範：檢查檔案前 8,000 位元組是否包含 Null Byte (`0x00`)，若是則拒絕讀取並報錯 `BINARY_FILE_REJECTED`。
+
+### 2. CLI 指令注入防禦 (Command Injection Defense)
+- **全面禁止 Shell 拼接**：嚴格禁止 `child_process.exec()`，所有 CLI 呼叫全面改用 `child_process.execFile()`，以無 Shell（`shell: false`）模式執行。
+- **固定執行檔與陣列傳參**：預設執行檔為 `codegraph`，所有參數皆以獨立字串陣列元素傳入。
+- **符號白名單嚴格校驗**：
+  - 輸入符號強制比對正規表達式：`^[a-zA-Z0-9_:.\\-]+$`。
+  - 包含空白、引號、分號、管道符號等非法字元者直接拒絕，拋出 `INVALID_SYMBOL`。
+- **執行超時與緩衝區防禦**：
+  - 子程序超時限制：`timeout: 5000` (5 秒)。
+  - 最大緩衝區限制：`maxBuffer: 5 * 1024 * 1024` (5MB)。
+
+### 3. 標準化錯誤分類 (Standardized Error Taxonomy)
+適配器拋出或捕獲之錯誤統一標準化為下列代碼：
+- `CLI_NOT_FOUND`：找不到 `codegraph` 執行檔。
+- `CLI_TIMEOUT`：CLI 執行超過 5000ms。
+- `CLI_NON_ZERO_EXIT`：CLI 回傳非 0 狀態碼。
+- `CLI_OUTPUT_TOO_LARGE`：輸出超過 5MB 緩衝區。
+- `CLI_INVALID_JSON`：輸出非合法 JSON 格式。
+- `SCHEMA_VALIDATION_ERROR`：CLI 輸出結構與 Schema 不符。
+- `PATH_TRAVERSAL_DETECTED`：目標路徑試圖逃逸專案根目錄。
+- `INVALID_SYMBOL`：符號含有非法字元。
+- `FILE_ACCESS_DENIED`：命中黑名單檔案或無權限存取。
+- `FILE_TOO_LARGE`：目標檔案超過 1MB。
+- `BINARY_FILE_REJECTED`：目標檔案為二進位檔案。
 
 ---
 
-## 🗓️ 八、 里程碑拆解與驗收標準 (Milestones & Acceptance Criteria)
+## 🗓️ 八、 里程碑拆解與授權邊界 (Milestones & Authorization Boundary)
 
-### 📌 P1-C1｜AST Indexing & Adapter Hardening (基礎適配層加固)
-* **交付內容**：
-  - 重構 `CodeGraphAdapter`，支援 `codegraph sync`、`getStatus()`、`analyzeImpact()`。
-  - 實作指令輸入防注入白名單校驗。
-  - 實作路徑穿越邊界防禦（禁止逃逸專案根目錄）。
-* **驗收標準**：
-  - 建立 `tests/test_codegraph_adapter.js`，離線覆蓋所有 CLI 輸出解析與錯誤防禦。
+```text
+[P1-C1: AST Indexing & Hardening]  <── 🎯【目前執行階段：唯一已授權】
+   │  • CodeGraphSchemas 實作與驗證
+   │  • CodeGraphAdapter execFile 與防注入
+   │  • 路徑穿越 / Symlink / 黑名單 / 500行安全讀取
+   │  • Tier 1 (Mock) + Tier 2 (Local Contract) 測試
+   │
+   ▼ ── [門禁審查：需用戶獨立裁決放行]
+[P1-C2: Call Graph & Impact Engine] (PENDING)
+   │
+   ▼
+[P1-C3: Role-Aware Retrieval & Compiler] (PENDING)
+   │
+   ▼
+[P1-C4: Task-Aware Dynamic Pipeline] (PENDING)
+```
 
-### 📌 P1-C2｜Call Graph & Impact Analysis Engine (圖譜與衝擊分析)
-* **交付內容**：
-  - 實作雙向 Call Graph 查詢（Callers + Callees）。
-  - 實作 Blast Radius 衝擊等級判定演算法（LOW / MEDIUM / HIGH）。
-  - 實作檔案與行號精準定位（含程式碼片段物理讀取與行號校驗）。
-* **驗收標準**：
-  - 建立確定性呼叫關係測試，精確斷言 `TaskManager` 的修改會衝擊 `server.js` 與測試套件。
-
-### 📌 P1-C3｜Role-Aware Retrieval & Context Compiler (角色導向編譯)
-* **交付內容**：
-  - 實作 `services/context_planner.js`：架構師、代碼審查員、文檔合成器三種策略。
-  - 實作 `services/context_compiler.js`：相關性排序、Token 預算限制、物理證據鏈標註。
-* **驗收標準**：
-  - 建立 `tests/test_codegraph_role_aware.js`：針對同一任務目標，斷言三種角色產出之 Context 結構完全符合正交設計。
-
-### 📌 P1-C4｜Task-Aware Dynamic Context Pipeline (全管線閉環整合)
-* **交付內容**：
-  - 將 Context Planner 深度接入 `TaskManager.submitTask` 與 `server.js`。
-  - 當收到任務且未帶 `code_context` 時，自動非阻塞執行 Role-Aware 預取。
-  - 與 `VerificationGate` 連動，實作失敗自我修正時的動態上下文擴展。
-* **驗收標準**：
-  - 建立端到端整合測試 `tests/test_codegraph_task_integration.js`。
-  - 納入 `run_tests.js`（擴充至 15 套測試），且 Phase 1 既有 14 套維持 100% 綠燈。
+- **P1-C1 驗收標準**：
+  1. `infrastructure/adapters/codegraph_schemas.js` 通過所有 Schema 斷言。
+  2. `infrastructure/adapters/codegraph_adapter.js` 全面移除 `exec`，採用 `execFile`。
+  3. `tests/test_codegraph_adapter.js` 涵蓋正常、異常、注入、穿越、逾時、合約測試。
+  4. 整合至 `tests/run_tests.js`（全套 15 套測試 100% PASS）。
 
 ---
 
-## 🧪 九、 測試矩陣與自動化斷言設計 (Test Matrix)
+## 🧪 九、 測試矩陣 (Test Matrix)
 
-| 測試代號 | 測試套件 | 測試情境與斷言重點 | 執行方式 |
+| 測試代號 | 測試項目 | 測試情境與斷言重點 | 執行方式 |
 | :--- | :--- | :--- | :---: |
-| **CG-1** | `test_codegraph_adapter.js` | 符號查詢、防注入特殊字元剝離、找不到符號時的優雅 Fallback | 確定性離線 Mock |
-| **CG-2** | `test_codegraph_adapter.js` | 路徑穿越防護：`../../package.json` 必須被拒絕，禁止跨目錄讀取 | 實體檔案邊界斷言 |
-| **CG-3** | `test_codegraph_impact.js` | 衝擊分析：驗證 `TaskManager` 變更之 `affected` 節點與 Blast Radius 判定 | 確定性圖譜斷言 |
-| **CG-4** | `test_codegraph_role_aware.js` | 角色差異化：架構師無細節程式碼、審查員有 Callers 與衝擊、文檔者無函數體 | 結構與欄位比對 |
-| **CG-5** | `test_codegraph_compiler.js` | 預算守護：超長代碼片段必須依優先級剪枝，並保留來源證據鏈標註 | Token 統計斷言 |
-| **CG-6** | `test_codegraph_integration.js` | 端到端整合：`POST /api/tasks` 帶角色自動生成 code_context 並執行成功 | HTTP 整合測試 |
+| **C1-T1** | 符號白名單驗證 | 惡意符號 `test; rm -rf` 或 `foo & calc` 必須被拒絕，拋出 `INVALID_SYMBOL` | 離線單元 |
+| **C1-T2** | 路徑穿越防護 | `../../package.json`、偽前綴 `project-secret` 必須被攔截 | 實體路徑計算 |
+| **C1-T3** | Symlink 逃逸防禦 | 專案內 symlink 指向專案外檔案，解析真實路徑後必須攔截 | 符號連結驗證 |
+| **C1-T4** | 黑名單與檔案限制 | 讀取 `.env`、超過 500 行、超過 1MB、二進位檔必須被拒絕 | 沙盒邊界斷言 |
+| **C1-T5** | CLI 異常與逾時 | 模擬 5000ms 超時、Non-zero exit、畸形 JSON，驗證錯誤封裝 | Mock Runner |
+| **C1-T6** | Schema 實體驗證 | CLI 回傳缺失欄位或型別錯誤時，拋出 `SCHEMA_VALIDATION_ERROR` | Schema 校驗 |
+| **C1-T7** | 本機 CLI 合約測試 | 呼叫本地真實 `codegraph status` 與 `query`，確認契約完全對齊 | 本機合約測試 |
 
 ---
 

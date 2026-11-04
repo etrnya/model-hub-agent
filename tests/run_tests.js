@@ -36,7 +36,8 @@ const OFFLINE_SUITES = [
   'test_role_manager.js',
   'test_role_integration.js',
   'test_async_task_manager.js',
-  'test_async_task_integration.js'
+  'test_async_task_integration.js',
+  'test_codegraph_adapter.js'
 ];
 
 // 2. 外部依賴整合測試清單 (External Integration & Provider Diagnostics)
