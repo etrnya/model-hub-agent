@@ -2,8 +2,9 @@
  * P1-C3.1 Verification Test Suite
  * Comprehensive verification for RoleAwareContextPlanner and TokenBudgetGuard.
  * 
- * Includes C3.1-TX: Token Estimation Adversarial Test across Traditional Chinese,
- * English, code, symbols, JSON, and SHA-256 hashes.
+ * Includes C3.1-TX: Token Estimation Adversarial Test,
+ * Three-Mode Tokenizer Contract, Two-Layer Budget Distinction,
+ * and Orthogonal Evidence Status Preservation.
  * 
  * Author: etrnya
  */
@@ -15,7 +16,8 @@ const {
 } = require('../services/context_planner');
 const {
   TokenBudgetGuard,
-  TokenBudgetError
+  TokenBudgetError,
+  VERIFIED_BYTE_LEVEL_BPE_PROFILES
 } = require('../services/token_budget_guard');
 const {
   validateTaskPayload,
@@ -27,11 +29,6 @@ const {
 // Reference Subword / Exact Tokenizer for Adversarial Comparison
 function referenceBpeTokenizer(text) {
   if (typeof text !== 'string') return 0;
-  // Subword approximation:
-  // CJK: 1-2 tokens per char
-  // English words: 1 token per ~3.5 chars
-  // Numbers: 1 token per 2-3 digits
-  // Symbols: 1 token each
   let count = 0;
   const cjk = (text.match(/[\u4e00-\u9fa5\u3040-\u30ff\uac00-\ud7af]/g) || []).length;
   count += Math.ceil(cjk * 1.5);
@@ -153,7 +150,6 @@ async function runTests() {
       targetSymbols: ['ErrorMapper.map'],
       targetFiles: ['infrastructure/adapters/error_mapper.js']
     };
-    // doc_synthesizer naturally excludes tests, but BUG_FIX task mandatory requires tests
     const plan = await planner.plan('doc_synthesizer', payload);
     assert.strictEqual(plan.includeAffectedTests, true, 'Tier 2 Task requirement must override Tier 3 role preference');
   });
@@ -185,7 +181,8 @@ async function runTests() {
     );
   });
 
-  await testAsync('Planner: Security Invariants - Depth capped at 3 and budget hard clamped', async () => {
+  await testAsync('Planner: Two-layer budget distinction - Planner planned vs Guard physical hard cap', async () => {
+    // Layer 1 (Planner): maxAllowedBudget configured to 4000 clamps requested 5500 to 4000
     const planner = new RoleAwareContextPlanner({ defaultMaxTokens: 3000, maxAllowedBudget: 4000 });
     const payload = {
       taskId: 'task-105',
@@ -197,9 +194,14 @@ async function runTests() {
     };
     const plan = await planner.plan('code_reviewer', payload);
     assert.strictEqual(plan.traversalDepth, 3, 'Depth must be capped at 3');
-    assert.strictEqual(plan.maxTokenBudget, 4000, 'Budget must be clamped to maxAllowedBudget');
+    assert.strictEqual(plan.maxTokenBudget, 4000, 'Planned budget must be clamped to planner maxAllowedBudget');
 
-    // Test extreme value > 32000 rejected by schema
+    // Layer 2 (Guard): Even if planner planned 4000, TokenBudgetGuard physically clamps to 3000
+    const guard = new TokenBudgetGuard({ hardCapLimit: 3000 });
+    const guardResult = guard.enforceBudget([], plan.maxTokenBudget);
+    assert.strictEqual(guardResult.hardCapLimit, 3000, 'Guard physical hard cap strictly limits to 3000 regardless of planner 4000');
+
+    // Extreme value > 32000 rejected by schema
     const extremePayload = { ...payload, maxExecutionTokens: 99999 };
     await assert.rejects(
       async () => await planner.plan('code_reviewer', extremePayload),
@@ -211,7 +213,6 @@ async function runTests() {
     const planner = new RoleAwareContextPlanner();
     const invalidPayload = {
       taskId: 'task-inv-1',
-      // Missing action and objective
       targetSymbols: ['foo'],
       targetFiles: ['foo.js']
     };
@@ -316,7 +317,6 @@ async function runTests() {
 
   test('C3.1-TX: Adversarial - Malformed Surrogates return unverifiable result', () => {
     const guard = new TokenBudgetGuard();
-    // Lone high surrogate without low surrogate
     const malformed = 'Valid string with lone surrogate: \uD800 and suffix';
     const est = guard.conservativeEstimate(malformed);
     assert.strictEqual(est.verifiable, false);
@@ -324,10 +324,10 @@ async function runTests() {
 
     const estimateResult = guard.estimateTokens(malformed);
     assert.strictEqual(estimateResult.verifiable, false);
-    assert.ok(estimateResult.error.includes('TOKEN_BUDGET_UNVERIFIABLE'));
+    assert.strictEqual(estimateResult.errorCode, 'TOKEN_BUDGET_UNVERIFIABLE');
   });
 
-  test('BudgetGuard: Exact Tokenizer mode delegates to adapter and handles errors', () => {
+  test('BudgetGuard Mode A: Exact Tokenizer mode delegates to adapter and fails closed on error', () => {
     const mockAdapter = {
       countTokens: (text) => 42
     };
@@ -337,14 +337,42 @@ async function runTests() {
     assert.strictEqual(res.tokens, 42);
     assert.strictEqual(res.method, 'EXACT_TOKENIZER');
 
-    // Test adapter throwing error
+    // Test adapter throwing error -> FAIL-CLOSED (never falls back to unverified estimator)
     const faultyAdapter = {
       countTokens: () => { throw new Error('BPE vocab not loaded'); }
     };
     const faultyGuard = new TokenBudgetGuard({ tokenizerAdapter: faultyAdapter, mode: 'exact' });
     const errRes = faultyGuard.estimateTokens('any string');
     assert.strictEqual(errRes.verifiable, false);
+    assert.strictEqual(errRes.errorCode, 'TOKEN_BUDGET_UNVERIFIABLE');
     assert.ok(errRes.error.includes('TOKEN_BUDGET_UNVERIFIABLE'));
+  });
+
+  test('BudgetGuard Mode B: Verified Byte-Level BPE Upper Bound with Framing Reserve', () => {
+    const guard = new TokenBudgetGuard({
+      mode: 'byte_level_bpe_upper_bound',
+      tokenizerProfile: 'TIKTOKEN_CL100K',
+      framingReserveTokens: 30
+    });
+    const sample = 'function test() { return 1; }';
+    const expectedByteLength = Buffer.byteLength(sample, 'utf8');
+    const res = guard.estimateTokens(sample);
+
+    assert.strictEqual(res.verifiable, true);
+    assert.strictEqual(res.method, 'BYTE_LEVEL_BPE_THEORETICAL_UPPER_BOUND');
+    assert.strictEqual(res.byteLength, expectedByteLength);
+    assert.strictEqual(res.tokens, expectedByteLength + 30);
+  });
+
+  test('BudgetGuard Mode C: Unverified tokenizer profile returns TOKEN_BUDGET_UNVERIFIABLE (Fail-Closed)', () => {
+    const guard = new TokenBudgetGuard({
+      mode: 'byte_level_bpe_upper_bound',
+      tokenizerProfile: 'CLAUDE_UNKNOWN_PROPRIETARY' // Not in verified whitelist
+    });
+    const res = guard.estimateTokens('sample text');
+    assert.strictEqual(res.verifiable, false);
+    assert.strictEqual(res.errorCode, 'TOKEN_BUDGET_UNVERIFIABLE');
+    assert.ok(res.error.includes('is not verified for byte-level BPE bounds'));
   });
 
   test('BudgetGuard: Core Evidence Over-Budget returns CORE_EVIDENCE_OVER_BUDGET (Fail-Closed)', () => {
@@ -358,7 +386,9 @@ async function runTests() {
         lineEnd: 50,
         snippet: hugeCoreSnippet,
         isCoreTarget: true,
-        evidenceValidity: 'VERIFIED'
+        validationStatus: 'VERIFIED',
+        contentCompleteness: 'FULL',
+        sourceSnippetSha256: 'a'.repeat(64)
       }
     ];
 
@@ -368,8 +398,9 @@ async function runTests() {
     assert.ok(result.notices[0].includes('Fail-Closed: Core target symbol "HugeCoreTarget" requires'));
   });
 
-  test('BudgetGuard: Pruning Ladder Level 1~4 executes deterministically', () => {
-    const guard = new TokenBudgetGuard({ hardCapLimit: 300 });
+  test('BudgetGuard: Pruning Ladder Level 1~4 updates orthogonal status and full 64-char Hash', () => {
+    const originalHash = 'b'.repeat(64);
+    const guard = new TokenBudgetGuard({ hardCapLimit: 850 });
     const evidence = [
       {
         symbol: 'CoreTarget',
@@ -378,7 +409,8 @@ async function runTests() {
         lineEnd: 10,
         snippet: 'function CoreTarget() { return 1; }',
         isCoreTarget: true,
-        evidenceValidity: 'VERIFIED',
+        validationStatus: 'VERIFIED',
+        sourceSnippetSha256: originalHash,
         depth: 0
       },
       {
@@ -388,7 +420,8 @@ async function runTests() {
         lineEnd: 20,
         snippet: 'function SecondaryCaller() {\n  // line 1\n  // line 2\n  return CoreTarget();\n}',
         isCoreTarget: false,
-        evidenceValidity: 'VERIFIED',
+        validationStatus: 'VERIFIED',
+        sourceSnippetSha256: 'c'.repeat(64),
         depth: 1
       },
       {
@@ -398,15 +431,31 @@ async function runTests() {
         lineEnd: 30,
         snippet: 'function DistantLeaf() {\n  ' + '// line\n'.repeat(25) + '}',
         isCoreTarget: false,
-        evidenceValidity: 'VERIFIED',
+        validationStatus: 'VERIFIED',
+        sourceSnippetSha256: 'd'.repeat(64),
         depth: 2
       }
     ];
 
-    const result = guard.enforceBudget(evidence, 300);
+    const result = guard.enforceBudget(evidence, 850);
     assert.strictEqual(result.success, true);
-    assert.ok(result.totalTokens <= 300, `Total tokens (${result.totalTokens}) must be <= 300`);
+    assert.ok(result.totalTokens <= 850, `Total tokens (${result.totalTokens}) must be <= 850`);
     assert.ok(result.truncatedItems.length > 0, 'Pruning ladder must record truncated items');
+
+    // Orthogonal status checks on pruned items
+    const coreItem = result.retainedItems.find(i => i.isCoreTarget);
+    assert.strictEqual(coreItem.contentCompleteness, 'FULL');
+    assert.strictEqual(coreItem.isTruncated, false);
+    assert.strictEqual(coreItem.sourceSnippetSha256, originalHash, 'Source hash must NEVER be overwritten');
+    assert.strictEqual(coreItem.emittedContentSha256.length, 64, 'emittedContentSha256 must be full 64-char hex');
+
+    // Check pruned item has contentCompleteness = PARTIAL and isTruncated = true
+    const prunedItem = result.retainedItems.find(i => i.symbol === 'DistantLeaf');
+    assert.ok(prunedItem, 'DistantLeaf should be retained in Level 1 pruning');
+    assert.strictEqual(prunedItem.contentCompleteness, 'PARTIAL');
+    assert.strictEqual(prunedItem.isTruncated, true);
+    assert.strictEqual(prunedItem.emittedContentSha256.length, 64);
+
     assert.doesNotThrow(() => validateTokenBudgetResult(result));
   });
 
@@ -420,13 +469,13 @@ async function runTests() {
         lineEnd: 5,
         snippet: 'function helper() { return true; }',
         isCoreTarget: true,
-        evidenceValidity: 'VERIFIED'
+        validationStatus: 'VERIFIED',
+        sourceSnippetSha256: 'e'.repeat(64)
       }
     ];
     const metadata = { planId: 'plan-1234', policy: 'BALANCED_DEFAULT' };
     const result = guard.enforceBudget(evidence, 500, metadata);
     assert.strictEqual(result.success, true);
-    // Envelope adds header, metadata, hash label, and markdown formatting
     assert.ok(result.totalTokens > 15, 'Serialized context must account for wrapper tokens');
   });
 

@@ -2,12 +2,13 @@
  * Token Budget Guard
  * 
  * Part of Phase 1-C3.1: Core Planning & Budgeting
- * Implements deterministic token budgeting, conservative estimation,
- * four-stage pruning ladder, and fail-closed safety invariants.
+ * Implements deterministic token budgeting, three-mode tokenizer contract,
+ * four-stage pruning ladder, orthogonal status preservation, and fail-closed safety invariants.
  * 
  * Author: etrnya
  */
 
+const crypto = require('node:crypto');
 const {
   validateTokenBudgetResult,
   ContextValidationError
@@ -22,17 +23,33 @@ class TokenBudgetError extends Error {
   }
 }
 
+// Whitelist of verified Byte-Level BPE tokenizer profiles
+const VERIFIED_BYTE_LEVEL_BPE_PROFILES = Object.freeze([
+  'TIKTOKEN_CL100K',
+  'TIKTOKEN_O200K',
+  'TIKTOKEN_R50K',
+  'TIKTOKEN_P50K'
+]);
+
 class TokenBudgetGuard {
   /**
    * @param {Object} [options]
-   * @param {number} [options.hardCapLimit=3000]
-   * @param {Object} [options.tokenizerAdapter=null]
-   * @param {'auto'|'exact'|'conservative'} [options.mode='auto']
+   * @param {number} [options.hardCapLimit=3000] - Ultimate physical hard limit (cannot be bypassed)
+   * @param {Object} [options.tokenizerAdapter=null] - Exact tokenizer adapter
+   * @param {string} [options.tokenizerProfile='TIKTOKEN_CL100K'] - Tokenizer implementation profile
+   * @param {number} [options.framingReserveTokens=30] - Framing overhead reserved from total budget
+   * @param {'auto'|'exact'|'byte_level_bpe_upper_bound'|'conservative'} [options.mode='auto']
    * @param {Object} [options.windowProfile]
    */
   constructor(options = {}) {
-    this.hardCapLimit = options.hardCapLimit || 3000;
+    this.hardCapLimit = (typeof options.hardCapLimit === 'number' && options.hardCapLimit >= 0)
+      ? options.hardCapLimit
+      : 3000;
     this.tokenizerAdapter = options.tokenizerAdapter || null;
+    this.tokenizerProfile = options.tokenizerProfile || 'TIKTOKEN_CL100K';
+    this.framingReserveTokens = (typeof options.framingReserveTokens === 'number' && options.framingReserveTokens >= 0)
+      ? options.framingReserveTokens
+      : 30;
     this.mode = options.mode || 'auto';
     this.windowProfile = options.windowProfile || {
       totalWindow: 32000,
@@ -49,14 +66,13 @@ class TokenBudgetGuard {
    * @returns {boolean}
    */
   hasMalformedSurrogates(str) {
-    // Lone high surrogate or lone low surrogate
     return /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(str);
   }
 
   /**
-   * Computes a provably conservative upper-bound token count.
-   * Accounts for Traditional Chinese (CJK), English, symbols, JSON, and hex hashes.
-   * In any byte-level BPE tokenizer, token count <= UTF-8 byte length.
+   * Computes an empirical conservative token estimate.
+   * Note: This is an empirical calibration heuristic for ranking and optimization,
+   * NOT a mathematically proven universal hard upper bound.
    * 
    * @param {string} text 
    * @returns {{ verifiable: boolean, tokens?: number, byteLength?: number, reason?: string, method?: string }}
@@ -69,7 +85,7 @@ class TokenBudgetGuard {
       return { verifiable: false, reason: 'MALFORMED_UTF16_SURROGATE' };
     }
     if (text.length === 0) {
-      return { verifiable: true, tokens: 0, byteLength: 0, method: 'CONSERVATIVE_UPPER_BOUND' };
+      return { verifiable: true, tokens: 0, byteLength: 0, method: 'CONSERVATIVE_EMPIRICAL_HEURISTIC' };
     }
 
     const byteLen = Buffer.byteLength(text, 'utf8');
@@ -104,7 +120,6 @@ class TokenBudgetGuard {
       wsTokens += Math.max(1, Math.ceil(s.length / 2.0));
     }
 
-    // Conservative sum with category multipliers
     const estimatedTokens = Math.ceil(
       cjkCount * 2.5 +
       astralCount * 4.0 +
@@ -114,38 +129,48 @@ class TokenBudgetGuard {
       wsTokens
     );
 
-    // Apply 15% safety factor + baseline safety floor
     const conservativeWithSafety = Math.ceil(estimatedTokens * 1.15) + 2;
-
-    // Mathematical upper bound: cannot exceed byteLen (in byte-level BPE)
     const finalTokens = Math.min(conservativeWithSafety, byteLen);
 
     return {
       verifiable: true,
       tokens: finalTokens,
       byteLength: byteLen,
-      method: 'CONSERVATIVE_UPPER_BOUND'
+      method: 'CONSERVATIVE_EMPIRICAL_HEURISTIC'
     };
   }
 
   /**
-   * Estimates tokens for a given string based on mode and available adapter.
+   * Estimates tokens using the strict three-mode execution contract:
+   * Mode A: Exact Tokenizer (Priority 1 if adapter available)
+   * Mode B: Verified Byte-Level BPE Upper Bound (T <= byteLength + framing)
+   * Mode C: Unverifiable Fail-Closed (TOKEN_BUDGET_UNVERIFIABLE)
    * 
    * @param {string} text 
-   * @returns {{ verifiable: boolean, tokens: number, method: string, error?: string }}
+   * @returns {{ verifiable: boolean, tokens: number, method: string, error?: string, errorCode?: string }}
    */
   estimateTokens(text) {
     if (typeof text !== 'string') {
       return { verifiable: false, tokens: 0, method: 'INVALID_INPUT', error: 'Input must be a string' };
     }
+    if (this.hasMalformedSurrogates(text)) {
+      return {
+        verifiable: false,
+        tokens: 0,
+        method: 'MALFORMED_UNICODE',
+        errorCode: 'TOKEN_BUDGET_UNVERIFIABLE',
+        error: 'TOKEN_BUDGET_UNVERIFIABLE: Malformed UTF-16 surrogates detected'
+      };
+    }
 
-    // Exact Tokenizer Mode
+    // Mode A: Exact Tokenizer (Priority 1 if adapter provided or mode explicitly 'exact')
     if (this.mode === 'exact' || (this.mode === 'auto' && this.tokenizerAdapter)) {
       if (!this.tokenizerAdapter || typeof this.tokenizerAdapter.countTokens !== 'function') {
         return {
           verifiable: false,
           tokens: 0,
           method: 'EXACT_TOKENIZER',
+          errorCode: 'TOKEN_BUDGET_UNVERIFIABLE',
           error: 'TOKEN_BUDGET_UNVERIFIABLE: Exact tokenizer requested but adapter is missing or invalid'
         };
       }
@@ -156,35 +181,65 @@ class TokenBudgetGuard {
             verifiable: false,
             tokens: 0,
             method: 'EXACT_TOKENIZER',
+            errorCode: 'TOKEN_BUDGET_UNVERIFIABLE',
             error: 'TOKEN_BUDGET_UNVERIFIABLE: Exact tokenizer returned non-numeric or negative count'
           };
         }
         return { verifiable: true, tokens: Math.ceil(count), method: 'EXACT_TOKENIZER' };
       } catch (err) {
+        // FAIL-CLOSED: Exact tokenizer error MUST NOT fall back silently to unverified estimator
         return {
           verifiable: false,
           tokens: 0,
           method: 'EXACT_TOKENIZER',
+          errorCode: 'TOKEN_BUDGET_UNVERIFIABLE',
           error: `TOKEN_BUDGET_UNVERIFIABLE: Exact tokenizer threw error: ${err.message}`
         };
       }
     }
 
-    // Conservative Estimator Mode
-    const result = this.conservativeEstimate(text);
-    if (!result.verifiable) {
+    // Mode B: Verified Byte-Level BPE Theoretical Upper Bound
+    // In any byte-level BPE, 1 token >= 1 UTF-8 byte, so tokens <= byteLength.
+    if (this.mode === 'byte_level_bpe_upper_bound' || (this.mode === 'auto' && !this.tokenizerAdapter)) {
+      if (this.tokenizerProfile && VERIFIED_BYTE_LEVEL_BPE_PROFILES.includes(this.tokenizerProfile)) {
+        const byteLen = Buffer.byteLength(text, 'utf8');
+        const totalUpper = byteLen + this.framingReserveTokens;
+        return {
+          verifiable: true,
+          tokens: totalUpper,
+          byteLength: byteLen,
+          framingReserve: this.framingReserveTokens,
+          method: 'BYTE_LEVEL_BPE_THEORETICAL_UPPER_BOUND'
+        };
+      }
+    }
+
+    // Mode: Explicit Conservative Heuristic Mode
+    if (this.mode === 'conservative') {
+      const res = this.conservativeEstimate(text);
+      if (!res.verifiable) {
+        return {
+          verifiable: false,
+          tokens: 0,
+          method: 'CONSERVATIVE_EMPIRICAL_HEURISTIC',
+          errorCode: 'TOKEN_BUDGET_UNVERIFIABLE',
+          error: `TOKEN_BUDGET_UNVERIFIABLE: Conservative estimation failed (${res.reason})`
+        };
+      }
       return {
-        verifiable: false,
-        tokens: 0,
-        method: 'CONSERVATIVE_UPPER_BOUND',
-        error: `TOKEN_BUDGET_UNVERIFIABLE: Conservative estimation failed (${result.reason})`
+        verifiable: true,
+        tokens: res.tokens,
+        method: res.method
       };
     }
 
+    // Mode C: Unverifiable Profile Fail-Closed
     return {
-      verifiable: true,
-      tokens: result.tokens,
-      method: result.method
+      verifiable: false,
+      tokens: 0,
+      method: 'UNVERIFIABLE_PROFILE',
+      errorCode: 'TOKEN_BUDGET_UNVERIFIABLE',
+      error: `TOKEN_BUDGET_UNVERIFIABLE: Tokenizer profile "${this.tokenizerProfile}" is not verified for byte-level BPE bounds`
     };
   }
 
@@ -195,7 +250,10 @@ class TokenBudgetGuard {
    */
   serializeEvidenceItem(item) {
     const header = `### [EVIDENCE: ${item.symbol || 'unknown'}] (${item.filePath || 'unknown'}:${item.lineStart || 1}-${item.lineEnd || 1})\n`;
-    const meta = `- Hash: ${item.snippetSha256 || '00000000'} | Validity: ${item.evidenceValidity || 'UNVERIFIED'}\n`;
+    const validity = item.validationStatus || item.evidenceValidity || 'UNVERIFIED';
+    const completeness = item.contentCompleteness || (item.isTruncated ? 'PARTIAL' : 'FULL');
+    const hash = item.sourceSnippetSha256 || item.snippetSha256 || '0'.repeat(64);
+    const meta = `- SourceHash: ${hash} | Validity: ${validity} | Completeness: ${completeness}\n`;
     const body = `\`\`\`javascript\n${item.snippet || ''}\n\`\`\`\n\n`;
     return header + meta + body;
   }
@@ -224,7 +282,7 @@ class TokenBudgetGuard {
 
   /**
    * Enforces the hard token budget against admitted evidence using the 4-stage pruning ladder.
-   * Fails closed if core evidence exceeds budget or token estimation is unverifiable.
+   * Updates orthogonal status fields (contentCompleteness, isTruncated, emittedContentSha256).
    * 
    * @param {Array<Object>} admittedEvidence 
    * @param {number} [maxBudget]
@@ -280,6 +338,17 @@ class TokenBudgetGuard {
     const truncatedItems = [];
     const notices = [];
 
+    // Ensure initial orthogonal fields on all retained items
+    for (const item of retainedItems) {
+      if (!item.contentCompleteness) {
+        item.contentCompleteness = 'FULL';
+        item.isTruncated = false;
+      }
+      if (!item.sourceSnippetSha256 && item.snippetSha256) {
+        item.sourceSnippetSha256 = item.snippetSha256;
+      }
+    }
+
     // Initial Full Check
     let currentSerialized = this.serializeFullContext(retainedItems, notices, metadata);
     let currentEstimate = this.estimateTokens(currentSerialized);
@@ -296,47 +365,37 @@ class TokenBudgetGuard {
       };
     }
 
-    // If already within budget, return immediately
-    if (currentEstimate.tokens <= hardLimit) {
-      const result = {
-        success: true,
-        totalTokens: currentEstimate.tokens,
-        hardCapLimit: hardLimit,
-        retainedItems,
-        truncatedItems,
-        notices
-      };
-      validateTokenBudgetResult(result);
-      return result;
-    }
-
     // --- Ladder Level 1: Remove snippets of distant leaf nodes (depth >= 2) ---
-    for (let i = 0; i < retainedItems.length; i++) {
-      const item = retainedItems[i];
-      if (!item.isCoreTarget && (item.depth || 0) >= 2 && item.snippet) {
-        const originalLines = (item.snippet.match(/\n/g) || []).length + 1;
-        const savedSnippet = item.snippet;
-        item.snippet = `// [Leaf node snippet stripped: ${originalLines} lines]`;
-        
-        const testSerialized = this.serializeFullContext(retainedItems, notices, metadata);
-        const testEstimate = this.estimateTokens(testSerialized);
-        const tokensSaved = Math.max(0, currentEstimate.tokens - testEstimate.tokens);
+    if (currentEstimate.tokens > hardLimit) {
+      for (let i = 0; i < retainedItems.length; i++) {
+        const item = retainedItems[i];
+        if (!item.isCoreTarget && (item.depth || 0) >= 2 && item.snippet) {
+          const originalLines = (item.snippet.match(/\n/g) || []).length + 1;
+          item.snippet = `// [Leaf node snippet stripped: ${originalLines} lines]`;
+          item.contentCompleteness = 'PARTIAL';
+          item.isTruncated = true;
+          item.emittedContentSha256 = crypto.createHash('sha256').update(item.snippet).digest('hex');
 
-        truncatedItems.push({
-          symbol: item.symbol,
-          filePath: item.filePath,
-          originalLines,
-          pruningAction: 'STRIPPED_SNIPPET',
-          tokensSaved
-        });
-        currentEstimate = testEstimate;
+          const testSerialized = this.serializeFullContext(retainedItems, notices, metadata);
+          const testEstimate = this.estimateTokens(testSerialized);
+          const tokensSaved = Math.max(0, currentEstimate.tokens - testEstimate.tokens);
 
-        if (currentEstimate.tokens <= hardLimit) break;
+          truncatedItems.push({
+            symbol: item.symbol,
+            filePath: item.filePath,
+            originalLines,
+            pruningAction: 'STRIPPED_SNIPPET',
+            tokensSaved
+          });
+          currentEstimate = testEstimate;
+
+          if (currentEstimate.tokens <= hardLimit) break;
+        }
       }
     }
 
+    // --- Ladder Level 2: Fold secondary callers (depth === 1) implementation ---
     if (currentEstimate.tokens > hardLimit) {
-      // --- Ladder Level 2: Fold secondary callers (depth === 1) implementation ---
       for (let i = 0; i < retainedItems.length; i++) {
         const item = retainedItems[i];
         if (!item.isCoreTarget && (item.depth || 0) === 1 && item.snippet && !item.snippet.startsWith('// [Implementation folded')) {
@@ -344,6 +403,9 @@ class TokenBudgetGuard {
           const lines = item.snippet.split('\n');
           const signature = lines.slice(0, 3).join('\n');
           item.snippet = `${signature}\n  // [Implementation folded: ${originalLines} lines]`;
+          item.contentCompleteness = 'PARTIAL';
+          item.isTruncated = true;
+          item.emittedContentSha256 = crypto.createHash('sha256').update(item.snippet).digest('hex');
 
           const testSerialized = this.serializeFullContext(retainedItems, notices, metadata);
           const testEstimate = this.estimateTokens(testSerialized);
@@ -363,8 +425,8 @@ class TokenBudgetGuard {
       }
     }
 
+    // --- Ladder Level 3: Truncate long remaining peripheral snippets (head 25 + tail 10 lines) ---
     if (currentEstimate.tokens > hardLimit) {
-      // --- Ladder Level 3: Truncate long remaining peripheral snippets (head 25 + tail 10 lines) ---
       for (let i = 0; i < retainedItems.length; i++) {
         const item = retainedItems[i];
         if (!item.isCoreTarget && item.snippet) {
@@ -374,6 +436,9 @@ class TokenBudgetGuard {
             const tail = lines.slice(-10).join('\n');
             const originalLines = lines.length;
             item.snippet = `${head}\n  // ... [Truncated ${originalLines - 35} lines due to budget] ...\n${tail}`;
+            item.contentCompleteness = 'PARTIAL';
+            item.isTruncated = true;
+            item.emittedContentSha256 = crypto.createHash('sha256').update(item.snippet).digest('hex');
 
             const testSerialized = this.serializeFullContext(retainedItems, notices, metadata);
             const testEstimate = this.estimateTokens(testSerialized);
@@ -394,9 +459,12 @@ class TokenBudgetGuard {
       }
     }
 
+    // --- Ladder Level 4: Freeze to Core Target Only, Omit All Peripheral Items ---
     if (currentEstimate.tokens > hardLimit) {
-      // --- Ladder Level 4: Freeze to Core Target Only, Omit All Peripheral Items ---
       for (const p of peripheralItems) {
+        p.contentCompleteness = 'OMITTED';
+        p.isTruncated = true;
+        p.emittedContentSha256 = crypto.createHash('sha256').update('').digest('hex');
         truncatedItems.push({
           symbol: p.symbol,
           filePath: p.filePath,
@@ -412,7 +480,14 @@ class TokenBudgetGuard {
       currentEstimate = this.estimateTokens(testSerialized);
     }
 
-    // Step 4: Final Serialized Context Budget Verification
+    // Step 4: Final emittedContentSha256 calculation for unpruned items
+    for (const item of retainedItems) {
+      if (!item.emittedContentSha256) {
+        item.emittedContentSha256 = crypto.createHash('sha256').update(item.snippet || '').digest('hex');
+      }
+    }
+
+    // Final Serialized Context Budget Verification
     const finalSerialized = this.serializeFullContext(retainedItems, notices, metadata);
     const finalEstimate = this.estimateTokens(finalSerialized);
 
@@ -458,5 +533,6 @@ class TokenBudgetGuard {
 
 module.exports = {
   TokenBudgetGuard,
-  TokenBudgetError
+  TokenBudgetError,
+  VERIFIED_BYTE_LEVEL_BPE_PROFILES
 };
