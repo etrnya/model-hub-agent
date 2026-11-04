@@ -515,14 +515,36 @@ class CallGraphEngine {
       return mismatchEvidence;
     }
 
-    // 5. Stale / Timestamp Drift Check
+    // 5. Complete Index Freshness & Hash Contract Verification
+    let indexedHash = options.indexedFileSha256 || null;
+    let indexedAt = indexTimestamp || null;
+
+    if (!indexedHash && this.adapter.getFileIndexSnapshot) {
+      const snapshot = await this.adapter.getFileIndexSnapshot(filePath);
+      if (snapshot) {
+        indexedHash = snapshot.contentHash;
+        indexedAt = indexedAt || snapshot.indexedAt;
+      }
+    }
+
     let validationStatus = 'VERIFIED';
-    let reason = 'Code snippet strictly matches AST node and physical line coordinates.';
+    let reason = 'Code snippet strictly matches AST node, physical line coordinates, and indexed file hash.';
     let confidence = 'HIGH';
 
-    if (indexTimestamp && stat.mtimeMs > indexTimestamp + 2000) {
+    if (!indexedHash) {
+      // Cannot obtain index snapshot hash -> Cannot prove index freshness
+      validationStatus = 'UNVERIFIED';
+      reason = `File "${filePath}" has no indexed hash in CodeGraph snapshot; freshness cannot be proven.`;
+      confidence = 'LOW';
+    } else if (fileSha256 !== indexedHash) {
+      // Hash mismatch: physical file has been modified after indexing -> STALE
       validationStatus = 'STALE';
-      reason = `File was modified on disk (${new Date(stat.mtimeMs).toISOString()}) after index was created (${new Date(indexTimestamp).toISOString()}). Snippet verified but index may be stale.`;
+      reason = `File hash mismatch: current file SHA-256 (${fileSha256.substring(0, 8)}...) differs from index snapshot (${indexedHash.substring(0, 8)}...). Index is stale.`;
+      confidence = 'MEDIUM';
+    } else if (indexedAt && stat.mtimeMs > indexedAt + 2000) {
+      // Hash matches, but mtime indicates touch/modify event -> STALE warning
+      validationStatus = 'STALE';
+      reason = `File was modified on disk (${new Date(stat.mtimeMs).toISOString()}) after index was created (${new Date(indexedAt).toISOString()}). Snippet verified but index may be stale.`;
       confidence = 'MEDIUM';
     }
 
@@ -531,12 +553,13 @@ class CallGraphEngine {
       filePath,
       lineRange: [startLine, endLine],
       fileSha256,
+      indexedFileSha256: indexedHash,
       snippetSha256,
       verifiedInIndex: true,
-      indexGeneratedAt: indexTimestamp ? new Date(indexTimestamp).toISOString() : new Date().toISOString(),
+      indexGeneratedAt: indexedAt ? new Date(indexedAt).toISOString() : new Date().toISOString(),
       validationStatus,
       confidence,
-      analysisCompleteness: 'COMPLETE',
+      analysisCompleteness: validationStatus === 'VERIFIED' ? 'COMPLETE' : 'PARTIAL',
       reason
     };
 

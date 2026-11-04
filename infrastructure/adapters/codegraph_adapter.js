@@ -86,6 +86,7 @@ class CodeGraphAdapter {
     this.cliExecutable = resolvedCli.binary;
     this.cliPrefixArgs = resolvedCli.prefixArgs;
     this.cliRunner = options.cliRunner || null;
+    this.mockIndexSnapshots = options.mockIndexSnapshots || null;
     this.timeoutMs = options.timeoutMs || EXEC_TIMEOUT_MS;
     this.maxBufferBytes = options.maxBufferBytes || EXEC_MAX_BUFFER;
 
@@ -508,14 +509,55 @@ class CodeGraphAdapter {
   /**
    * Backward-compatible getFeatureContext wrapper.
    */
-  async getFeatureContext(featureName) {
-    try {
-      const validSymbol = this.validateSymbol(featureName);
-      const stdout = await this._runCli(['context', validSymbol]);
-      return stdout.trim();
-    } catch (error) {
-      return `Error building feature context: ${error.message}`;
+  /**
+   * Retrieves the indexed file snapshot (content_hash, indexed_at) recorded in CodeGraph.
+   * Reads safely from .codegraph/codegraph.db in read-only mode, or uses mock snapshot if injected.
+   * @param {string} filePath 
+   * @returns {Promise<{ contentHash: string, indexedAt: number } | null>}
+   */
+  async getFileIndexSnapshot(filePath) {
+    if (!filePath || typeof filePath !== 'string') return null;
+
+    if (this.mockIndexSnapshots && this.mockIndexSnapshots[filePath]) {
+      return this.mockIndexSnapshots[filePath];
     }
+
+    try {
+      const dbPath = path.resolve(this.projectPath, '.codegraph/codegraph.db');
+      if (!fsSync.existsSync(dbPath)) {
+        return null;
+      }
+
+      // Normalize path to relative forward slash matching SQLite files.path
+      const resolvedTarget = path.resolve(this.projectPath, filePath);
+      const relativePath = path.relative(this.projectPath, resolvedTarget).replace(/\\/g, '/');
+
+      let sqliteModule;
+      try {
+        sqliteModule = require('node:sqlite');
+      } catch {
+        return null;
+      }
+
+      if (sqliteModule && sqliteModule.DatabaseSync) {
+        const db = new sqliteModule.DatabaseSync(dbPath, { open: true, readOnly: true });
+        try {
+          const stmt = db.prepare('SELECT content_hash, indexed_at FROM files WHERE path = ?');
+          const row = stmt.get(relativePath);
+          if (row) {
+            return {
+              contentHash: row.content_hash,
+              indexedAt: Number(row.indexed_at)
+            };
+          }
+        } finally {
+          db.close();
+        }
+      }
+    } catch (e) {
+      // Degrade gracefully if DB is locked or unavailable
+    }
+    return null;
   }
 }
 

@@ -326,25 +326,30 @@ async function runAll() {
     );
     const relSampleFile = path.relative(projectRoot, sampleFile);
 
-    await runTestCase('C2-C1', 'Accurate line coordinates verify with status VERIFIED', async () => {
+    await runTestCase('C2-C1', 'Accurate line coordinates & identical file hash verify with status VERIFIED', async () => {
       const adapter = new CodeGraphAdapter(projectRoot);
       const engine = new CallGraphEngine(adapter);
 
-      const evidence = await engine.verifyLineProvenance({
-        name: 'ServiceWorker',
-        filePath: relSampleFile,
-        startLine: 4,
-        endLine: 11
-      });
+      // Pre-compute actual file hash to mock index snapshot for this temp file
+      const crypto = require('crypto');
+      const actualFileContent = await fs.readFile(sampleFile, 'utf8');
+      const actualHash = crypto.createHash('sha256').update(actualFileContent).digest('hex');
+
+      const evidence = await engine.verifyLineProvenance(
+        {
+          name: 'ServiceWorker',
+          filePath: relSampleFile,
+          startLine: 4,
+          endLine: 11
+        },
+        { indexedFileSha256: actualHash, indexTimestamp: Date.now() + 10000 }
+      );
 
       assert.strictEqual(evidence.validationStatus, 'VERIFIED');
       assert.strictEqual(evidence.confidence, 'HIGH');
       assert.strictEqual(evidence.analysisCompleteness, 'COMPLETE');
-      assert.strictEqual(evidence.verifiedInIndex, true);
-      assert.strictEqual(typeof evidence.fileSha256, 'string');
-      assert.strictEqual(evidence.fileSha256.length, 64);
-      assert.strictEqual(typeof evidence.snippetSha256, 'string');
-      assert.strictEqual(evidence.snippetSha256.length, 64);
+      assert.strictEqual(evidence.fileSha256, actualHash);
+      assert.strictEqual(evidence.indexedFileSha256, actualHash);
     });
 
     await runTestCase('C2-C2', 'Line coordinates exceeding physical file bounds flag OUT_OF_BOUNDS', async () => {
@@ -379,11 +384,12 @@ async function runAll() {
       assert.strictEqual(evidence.reason.includes('Code has drifted'), true);
     });
 
-    await runTestCase('C2-C4', 'File modification after index creation flags STALE', async () => {
+    await runTestCase('C2-C4a', 'File modified even with close mtime flags STALE due to Hash mismatch', async () => {
       const adapter = new CodeGraphAdapter(projectRoot);
       const engine = new CallGraphEngine(adapter);
 
-      const pastIndexTimestamp = Date.now() - 3600 * 1000;
+      // Old index hash that differs from current file
+      const staleIndexHash = '0000000000000000000000000000000000000000000000000000000000000000';
 
       const evidence = await engine.verifyLineProvenance(
         {
@@ -392,28 +398,85 @@ async function runAll() {
           startLine: 4,
           endLine: 11
         },
-        { indexTimestamp: pastIndexTimestamp }
+        {
+          indexedFileSha256: staleIndexHash,
+          indexTimestamp: Date.now() + 5000 // mtime is within tolerance, but hash mismatch must force STALE
+        }
       );
 
       assert.strictEqual(evidence.validationStatus, 'STALE');
       assert.strictEqual(evidence.confidence, 'MEDIUM');
-      assert.strictEqual(evidence.reason.includes('File was modified on disk'), true);
+      assert.strictEqual(evidence.reason.includes('File hash mismatch'), true);
     });
 
-    await runTestCase('C2-C5', 'Non-existent symbol or file flags UNVERIFIED', async () => {
+    await runTestCase('C2-C4b', 'File modified while symbol still present flags STALE (Hash contract)', async () => {
       const adapter = new CodeGraphAdapter(projectRoot);
       const engine = new CallGraphEngine(adapter);
 
+      // Modify the file by adding a comment at the end (symbol ServiceWorker is still at same lines)
+      const modifiedContent = (await fs.readFile(sampleFile, 'utf8')) + '\n// appended modification';
+      await fs.writeFile(sampleFile, modifiedContent, 'utf8');
+
+      // Old index hash before appending comment
+      const crypto = require('crypto');
+      const originalLines = modifiedContent.split('\n').slice(0, -1).join('\n');
+      const oldHash = crypto.createHash('sha256').update(originalLines).digest('hex');
+
+      const evidence = await engine.verifyLineProvenance(
+        {
+          name: 'ServiceWorker',
+          filePath: relSampleFile,
+          startLine: 4,
+          endLine: 11
+        },
+        { indexedFileSha256: oldHash }
+      );
+
+      assert.strictEqual(evidence.validationStatus, 'STALE');
+      assert.strictEqual(evidence.confidence, 'MEDIUM');
+      assert.strictEqual(evidence.reason.includes('File hash mismatch'), true);
+    });
+
+    await runTestCase('C2-C4c', 'Index sync refreshes snapshot hash and restores VERIFIED status', async () => {
+      const adapter = new CodeGraphAdapter(projectRoot);
+      const engine = new CallGraphEngine(adapter);
+
+      // New hash matching the modified file content
+      const crypto = require('crypto');
+      const currentContent = await fs.readFile(sampleFile, 'utf8');
+      const refreshedHash = crypto.createHash('sha256').update(currentContent).digest('hex');
+
+      const evidence = await engine.verifyLineProvenance(
+        {
+          name: 'ServiceWorker',
+          filePath: relSampleFile,
+          startLine: 4,
+          endLine: 11
+        },
+        { indexedFileSha256: refreshedHash, indexTimestamp: Date.now() + 10000 }
+      );
+
+      assert.strictEqual(evidence.validationStatus, 'VERIFIED');
+      assert.strictEqual(evidence.fileSha256, refreshedHash);
+      assert.strictEqual(evidence.indexedFileSha256, refreshedHash);
+    });
+
+    await runTestCase('C2-C5', 'Missing index snapshot hash flags UNVERIFIED (cannot prove freshness)', async () => {
+      const adapter = new CodeGraphAdapter(projectRoot);
+      const engine = new CallGraphEngine(adapter);
+
+      // Unindexed file or symbol where getFileIndexSnapshot returns null
       const evidence = await engine.verifyLineProvenance({
-        name: 'GhostSymbol',
-        filePath: 'non/existent/path.js',
-        startLine: 1,
-        endLine: 10
+        name: 'ServiceWorker',
+        filePath: relSampleFile,
+        startLine: 4,
+        endLine: 11
       });
 
+      // Since sampleFile is a temporary file not yet in codegraph.db files table, it must be UNVERIFIED
       assert.strictEqual(evidence.validationStatus, 'UNVERIFIED');
-      assert.strictEqual(evidence.verifiedInIndex, false);
       assert.strictEqual(evidence.confidence, 'LOW');
+      assert.strictEqual(evidence.reason.includes('no indexed hash in CodeGraph snapshot'), true);
     });
 
     // ========================================================

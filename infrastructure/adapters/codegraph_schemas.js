@@ -138,7 +138,7 @@ const CodeGraphStatusSchema = {
   additionalProperties: true
 };
 
-// 6. SourceEvidence Schema (Strict physical evidence & provenance)
+// 6. SourceEvidence Schema (Strict physical evidence & provenance with hash comparison)
 const SourceEvidenceSchema = {
   type: 'object',
   required: ['symbol', 'filePath', 'lineRange', 'fileSha256', 'snippetSha256', 'validationStatus', 'confidence'],
@@ -152,6 +152,7 @@ const SourceEvidenceSchema = {
       maxItems: 2
     },
     fileSha256: { type: 'string', minLength: 64, maxLength: 64 },
+    indexedFileSha256: { type: ['string', 'null'], maxLength: 64 },
     snippetSha256: { type: 'string', minLength: 64, maxLength: 64 },
     verifiedInIndex: { type: 'boolean' },
     indexGeneratedAt: { type: 'string' },
