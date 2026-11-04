@@ -38,7 +38,8 @@ const OFFLINE_SUITES = [
   'test_async_task_manager.js',
   'test_async_task_integration.js',
   'test_codegraph_adapter.js',
-  'test_codegraph_impact.js'
+  'test_codegraph_impact.js',
+  'test_context_planning_budget.js'
 ];
 
 // 2. 外部依賴整合測試清單 (External Integration & Provider Diagnostics)
