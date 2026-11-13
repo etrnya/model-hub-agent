@@ -8,6 +8,13 @@
  */
 const crypto = require('crypto');
 const { TokenBudgetGuard } = require('./token_budget_guard');
+const {
+  AdmissionReceiptIssuer,
+  ProvenanceTokenIssuer,
+  decidePublication,
+  resolveDiagnosticConfidence,
+  mapReceiptToMatrixInputs
+} = require('./isolation_boundary');
 
 class ContextCompilationError extends Error {
   constructor(code, message, details = {}) {
@@ -626,6 +633,142 @@ class ContextCompiler {
     // 【不可變同源發布】：保證 contextText === reSerializedContextText 100% 同源！
     const contextText = reSerializedContextText;
     return this.assembleSuccessResult(contextText, secondEstimate, compiledItems, sessionSnapshotId, dlpRedactedCount, admissionResult.rejectedEvidence);
+  }
+
+  /**
+   * Phase 1-C3.3 Adapter: Compiles and evaluates candidate context through the Four-Tier
+   * Isolation Boundary, issuing branded 13-Field TLV AdmissionReceipt & SourceProvenanceToken,
+   * and enforcing the authoritative 90-row policy matrix via `decidePublication`.
+   *
+   * @param {object} retrievalPlan
+   * @param {object} taskContext - { taskId, tenantId, taskType }
+   * @param {object} [options] - { targetSymbol, snapshotFreshness, retrievalStatus, diagnosticReason, processTreeStatus }
+   * @returns {Promise<object>} { decision, envelope, admissionReceipt, provenanceToken }
+   */
+  async compileIsolatedEnvelope(retrievalPlan, taskContext, options = {}) {
+    const c32ActionMap = {
+      SECURITY_AUDIT: 'SECURITY_AUDIT',
+      REFACTOR: 'REFACTOR',
+      FEATURE_DEV: 'FEATURE',
+      DOCS_UPDATE: 'DOCUMENTATION'
+    };
+    const taskType = taskContext.taskType || 'FEATURE_DEV';
+    const taskAction = c32ActionMap[taskType] || 'FEATURE';
+    const targetSymbol = options.targetSymbol || (retrievalPlan && retrievalPlan.targetSymbol) || 'TargetSymbol';
+    const processTreeStatus = options.processTreeStatus || 'NOT_STARTED';
+
+    const compResult = await this.compile(retrievalPlan, { action: taskAction });
+    const compiledItems = compResult.compiledItems || [];
+    const snapshotId = options.snapshotId || compResult.metadata.snapshotId || 'snap-default';
+
+    // Compute aggregate evidence status using Conservative Monotonic Precedence (Iron Law 1)
+    let aggregateEvidenceStatus = 'NONE';
+    if (this.admissionEngine && typeof this.admissionEngine.computeAggregateEvidenceStatus === 'function') {
+      aggregateEvidenceStatus = this.admissionEngine.computeAggregateEvidenceStatus(compiledItems);
+    } else if (compiledItems.length > 0) {
+      aggregateEvidenceStatus = compiledItems[0].validationStatus || 'SOURCE_MATCHED';
+    }
+    if (options.aggregateEvidenceStatus) {
+      aggregateEvidenceStatus = options.aggregateEvidenceStatus;
+    }
+
+    const evaluatedItemsHash = (this.admissionEngine && typeof this.admissionEngine.computeEvaluatedItemsHash === 'function')
+      ? this.admissionEngine.computeEvaluatedItemsHash(compiledItems)
+      : crypto.createHash('sha256').update(JSON.stringify(compiledItems.map(i => i.sourceEvidenceId)), 'utf-8').digest('hex');
+
+    const anyTruncated = compiledItems.some(i => i.isTruncated || i.contentCompleteness !== 'FULL');
+    const completenessStatus = options.completenessStatus || (anyTruncated ? 'TRUNCATED' : 'FULL');
+    const snapshotFreshness = options.snapshotFreshness || 'OPTIMAL';
+    const retrievalStatus = options.retrievalStatus || (compiledItems.length > 0 ? (anyTruncated ? 'PARTIAL' : 'COMPLETE') : 'COMPLETE');
+    const diagnosticReason = options.diagnosticReason !== undefined
+      ? options.diagnosticReason
+      : (compiledItems.length === 0 ? 'TARGET_NOT_FOUND' : null);
+
+    const drift = snapshotFreshness === 'DRIFT_DETECTED' ? 'DRIFT_DETECTED' : 'INDEX_SNAPSHOT_MATCHED';
+    const router = snapshotFreshness === 'DEGRADED' ? 'DEGRADED' : (diagnosticReason === 'ROUTER_UNAVAILABLE' ? 'UNAVAILABLE' : 'OPTIMAL');
+    const degrad = (retrievalStatus === 'COMPLETE' && completenessStatus === 'FULL') ? 'COMPLETE' : (retrievalStatus === 'PARTIAL' ? 'PARTIAL' : 'INCOMPLETE');
+
+    const diagnosticConfidence = options.diagnosticConfidence || (
+      aggregateEvidenceStatus === 'NONE'
+        ? resolveDiagnosticConfidence(drift, router, degrad, diagnosticReason)
+        : 'HIGH'
+    );
+
+    const isDiagnosticChannel = aggregateEvidenceStatus === 'NONE';
+    const contextText = isDiagnosticChannel ? '' : compResult.contextText;
+    const contextTextHash = crypto.createHash('sha256').update(contextText, 'utf-8').digest('hex');
+
+    const pureParams = {
+      schemaVersion: '1.0',
+      taskId: taskContext.taskId,
+      tenantId: taskContext.tenantId,
+      taskType,
+      snapshotId,
+      snapshotFreshness,
+      policyVersion: '2.3.3',
+      aggregateEvidenceStatus,
+      retrievalStatus,
+      completenessStatus,
+      evaluatedItemsHash,
+      diagnosticReason,
+      diagnosticConfidence
+    };
+
+    const admissionReceipt = AdmissionReceiptIssuer.issueReceipt(pureParams, contextTextHash);
+    const provenanceToken = ProvenanceTokenIssuer.issueToken({
+      schemaVersion: '1.0',
+      tokenBrand: 'ANTIGRAVITY_PROVENANCE_v233',
+      source: isDiagnosticChannel ? 'DIAGNOSTIC_SYNTHESIS' : 'FRESH_LIVE_COMPILATION',
+      targetSymbol,
+      taskId: taskContext.taskId,
+      tenantId: taskContext.tenantId,
+      snapshotId,
+      envelopeSha256: contextTextHash
+    });
+
+    const candidateEnvelope = isDiagnosticChannel
+      ? Object.freeze({
+          schemaVersion: '1.0',
+          envelopeId: `diag-${taskContext.taskId}`,
+          taskId: taskContext.taskId,
+          tenantId: taskContext.tenantId,
+          targetSymbol,
+          snapshotId,
+          diagnosticConfidence,
+          diagnosticReason: diagnosticReason || 'TARGET_NOT_FOUND',
+          partialSymbolIndex: options.partialSymbolIndex || [],
+          admissionReceipt
+        })
+      : Object.freeze({
+          schemaVersion: '1.0',
+          envelopeId: `ctx-${taskContext.taskId}`,
+          taskId: taskContext.taskId,
+          tenantId: taskContext.tenantId,
+          targetSymbol,
+          snapshotId,
+          isolationTier: 'TIER_4_VERIFIED_FD',
+          contextText,
+          aggregateEvidenceStatus,
+          retrievalStatus,
+          provenanceToken,
+          admissionReceipt,
+          processTreeStatus
+        });
+
+    const decision = decidePublication(
+      taskContext,
+      candidateEnvelope,
+      provenanceToken,
+      admissionReceipt,
+      processTreeStatus
+    );
+
+    return {
+      decision,
+      envelope: candidateEnvelope,
+      admissionReceipt,
+      provenanceToken
+    };
   }
 }
 

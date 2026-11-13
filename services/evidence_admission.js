@@ -9,6 +9,7 @@
 const path = require('path');
 const fs = require('fs').promises;
 const crypto = require('crypto');
+const { AdmissionReceiptIssuer } = require('./isolation_boundary');
 
 /**
  * Escapes characters for regular expressions.
@@ -380,8 +381,69 @@ class EvidenceAdmissionEngine {
     return {
       admittedEvidence,
       rejectedEvidence,
-      summary
+      summary,
+      aggregateEvidenceStatus: this.computeAggregateEvidenceStatus(admittedEvidence),
+      evaluatedItemsHash: this.computeEvaluatedItemsHash(admittedEvidence)
     };
+  }
+
+  /**
+   * Phase 1-C3.3 Iron Law 1: Conservative Monotonic Precedence for Aggregate Evidence Status.
+   * Precedence: UNVERIFIED > STALE > CONTENT_VERIFIED > SOURCE_MATCHED (or NONE if empty).
+   * @param {Array<object>} items
+   * @returns {'SOURCE_MATCHED'|'CONTENT_VERIFIED'|'STALE'|'UNVERIFIED'|'NONE'}
+   */
+  computeAggregateEvidenceStatus(items = []) {
+    if (!Array.isArray(items) || items.length === 0) {
+      return 'NONE';
+    }
+    let hasUnverified = false;
+    let hasStale = false;
+    let hasContentVerified = false;
+    let hasSourceMatched = false;
+
+    for (const item of items) {
+      const status = item && item.validationStatus;
+      if (status === 'UNVERIFIED') hasUnverified = true;
+      else if (status === 'STALE') hasStale = true;
+      else if (status === 'CONTENT_VERIFIED') hasContentVerified = true;
+      else if (status === 'SOURCE_MATCHED') hasSourceMatched = true;
+    }
+
+    if (hasUnverified) return 'UNVERIFIED';
+    if (hasStale) return 'STALE';
+    if (hasContentVerified) return 'CONTENT_VERIFIED';
+    if (hasSourceMatched) return 'SOURCE_MATCHED';
+    return 'NONE';
+  }
+
+  /**
+   * Computes deterministic 64-char hex SHA-256 over evaluated items' IDs and statuses.
+   * @param {Array<object>} items
+   * @returns {string}
+   */
+  computeEvaluatedItemsHash(items = []) {
+    if (!Array.isArray(items) || items.length === 0) {
+      return crypto.createHash('sha256').update('EMPTY_EVIDENCE_SET', 'utf-8').digest('hex');
+    }
+    const canonicalEntries = items.map(item => {
+      const id = item.sourceEvidenceId || item.id || '';
+      const status = item.validationStatus || 'UNVERIFIED';
+      const hash = item.emittedContentSha256 || item.sourceSnippetSha256 || '';
+      return `${id}:${status}:${hash}`;
+    });
+    return crypto.createHash('sha256').update(canonicalEntries.join('|'), 'utf-8').digest('hex');
+  }
+
+  /**
+   * Phase 1-C3.3 (R1, R4, R6): Issues a branded, frozen 13-Field TLV AdmissionReceipt
+   * from discrete primitive parameters in the trusted synchronous frame.
+   * @param {object} pureParams - PureAdmissionParams (13 primitive fields)
+   * @param {string} contextTextHash - 64-char hex SHA-256 of candidate contextText
+   * @returns {Readonly<object>} Branded AdmissionReceipt
+   */
+  issueAdmissionReceipt(pureParams, contextTextHash) {
+    return AdmissionReceiptIssuer.issueReceipt(pureParams, contextTextHash);
   }
 }
 

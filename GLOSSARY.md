@@ -18,6 +18,11 @@
 | **代碼圖譜適配器** | CodeGraph Adapter | `CodeGraphAdapter` | 介接本地端 AST 分析圖資料庫，實現外科手術式精準的程式符號與呼叫鏈查詢。 |
 | **上下文完整性閘門** | Context Integrity Gate | `ContextIntegrityGate` | 防止上下文雙重壓縮、追蹤 Provenance 來源並保護代碼寫入時的語意忠實度。 |
 | **向量記憶管理器** | Vector Memory Manager | `MemoryManager` | 介接 Qdrant 向量資料庫與 Vertex AI Embedding 的語意記憶快取層，實現重覆任務 100% LLM 繞過。 |
+| **驗收收據簽發者** | Admission Receipt Issuer | `AdmissionReceiptIssuer` | C3.3 唯一受信任收據簽發工廠，驗證 13 項純 Primitive 參數、計算規範 TLV 二進位雜湊並附加模組私有 WeakSet 品牌。 |
+| **來源血統權杖** | Source Provenance Token | `SourceProvenanceToken` | 綁定目標符號、任務 ID、租戶 ID、快照 ID 與候選 Context SHA-256 之不可變防偽血統憑證。 |
+| **四重隔離邊界** | Isolation Boundary | `IsolationBoundary` | 實作 Tier 1~4 隔離防線、全域 Sentinel 持久鎖定狀態機、記憶體不可變快照與內部 90 格權威政策矩陣查表引擎。 |
+| **租戶隔離快取** | Tenant Isolated Cache | `TenantIsolatedCache` | 綁定 `tenantId` (Tag 0x03) 與單調時鐘回撥偵測之跨租戶實體隔離快取層。 |
+| **執行權限防護員** | Execution Boundary Guard | `ExecutionBoundaryGuard` | 強制鎖定 `allowExecution: false` 並攔截非唯讀工具與 IPC 調用之硬性權限邊界。 |
 
 ## 技術組件 (Technical Components)
 
