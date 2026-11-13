@@ -22,7 +22,8 @@ async function compileCodeGraphContext(context, options = {}) {
   const hasTargets = Boolean(
     context &&
     ((Array.isArray(context.targetFiles) && context.targetFiles.length > 0) ||
-     (Array.isArray(context.targetSymbols) && context.targetSymbols.length > 0))
+     (Array.isArray(context.targetSymbols) && context.targetSymbols.length > 0) ||
+     (Array.isArray(context.evidenceNodes) && context.evidenceNodes.length > 0))
   );
   if (!hasPlan && !hasTargets) {
     return null;
@@ -32,6 +33,8 @@ async function compileCodeGraphContext(context, options = {}) {
   if (!retrievalPlan) {
     const planner = new RoleAwareContextPlanner();
     retrievalPlan = await planner.plan(context.roleId || options.roleId || null, {
+      taskId: context.taskId || options.taskId || `task-${Date.now()}`,
+      objective: context.objective || 'CodeGraph context retrieval',
       action: context.action || 'FEATURE',
       targetFiles: context.targetFiles || [],
       targetSymbols: context.targetSymbols || [],
@@ -39,15 +42,40 @@ async function compileCodeGraphContext(context, options = {}) {
     });
   }
 
+  // Ensure nodes carry a valid filePath when caller supplies targetFiles + string targetSymbols
+  if (!Array.isArray(retrievalPlan.nodes) || retrievalPlan.nodes.length === 0) {
+    if (Array.isArray(context.evidenceNodes) && context.evidenceNodes.length > 0) {
+      retrievalPlan = { ...retrievalPlan, nodes: context.evidenceNodes };
+    } else if (
+      Array.isArray(retrievalPlan.targetFiles) && retrievalPlan.targetFiles.length > 0 &&
+      Array.isArray(retrievalPlan.targetSymbols) && retrievalPlan.targetSymbols.length > 0
+    ) {
+      const defaultFile = retrievalPlan.targetFiles[0];
+      retrievalPlan = {
+        ...retrievalPlan,
+        nodes: retrievalPlan.targetSymbols.map((sym, idx) => ({
+          id: `ev-${String(idx + 1).padStart(2, '0')}`,
+          symbol: typeof sym === 'string' ? sym : (sym.symbol || sym.name),
+          filePath: (typeof sym === 'object' && sym.filePath) ? sym.filePath : defaultFile,
+          startLine: (typeof sym === 'object' && sym.startLine) ? sym.startLine : 1,
+          endLine: (typeof sym === 'object' && sym.endLine) ? sym.endLine : 60,
+          isCoreTarget: (typeof sym === 'object' && sym.isCoreTarget !== undefined) ? sym.isCoreTarget : (idx === 0),
+          relevanceScore: (typeof sym === 'object' && sym.relevanceScore !== undefined) ? sym.relevanceScore : (idx === 0 ? 1.0 : 0.6)
+        }))
+      };
+    }
+  }
+
+  const activeAdapter = options.codeGraphAdapter || codegraph;
   const admissionEngine = new EvidenceAdmissionEngine({
-    codeGraphAdapter: codegraph,
+    codeGraphAdapter: activeAdapter,
     workspaceRoot: options.workspaceRoot || process.cwd()
   });
   const compiler = new ContextCompiler({
     admissionEngine,
     tokenBudgetGuard: TokenBudgetGuard,
     guardrailManager: guardrail,
-    codeGraphAdapter: codegraph
+    codeGraphAdapter: activeAdapter
   });
 
   if (options.isolatedEnvelope || context.tenantId) {
@@ -773,4 +801,6 @@ class CascadingExecutor {
   }
 }
 
-module.exports = new CascadingExecutor();
+const executorInstance = new CascadingExecutor();
+executorInstance.compileCodeGraphContext = compileCodeGraphContext;
+module.exports = executorInstance;
