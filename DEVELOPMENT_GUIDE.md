@@ -1,0 +1,70 @@
+# model-hub-agent 開發指南 (Development Guide)
+
+本指南為 `model-hub-agent`（Agent OS 核心）之專案專屬工程手冊，與 [.agents/AGENTS.md](.agents/AGENTS.md) 及 [GLOSSARY.md](GLOSSARY.md) 共同構成雙層開發規範。
+
+---
+
+## 1. 核心架構與 P1-C1 ～ P1-C4 管線
+
+### 1.1 多模型級聯與容災主幹
+* **入口**：`main.js` 透過樂觀鎖 `GlobalState` (`shared/global_state.js`) 呼叫 `services/cascading_executor.js`。
+* **路由與斷路器**：`services/router.js` + `registry/heartbeat_registry.js` 依任務模態與層級挑選候選模型，並支援並行競速與故障降級。
+* **驗證與防護**：`services/guardrail_manager.js`（輸入/輸出 DLP 掃描與 Prompt Injection 攔截）與 `services/verification_gate.js`（非對稱雙重驗證與 Fail-Closed 閘門）。
+
+### 1.2 P1-C1 ～ P1-C4 上下文編譯與隔離管線
+`services/cascading_executor.js` 透過 `compileCodeGraphContext()` 將結構化程式碼檢索任務串接至以下管線：
+
+1. **AST 與影響分析 (P1-C1 / P1-C2)**：
+   * `infrastructure/adapters/codegraph_adapter.js` + `infrastructure/adapters/codegraph_schemas.js`
+   * `services/call_graph_engine.js`（Caller/Callee 與 Blast Radius 影響分析）
+2. **角色感知規劃與預算守衛 (P1-C3.1)**：
+   * `services/context_planner.js`（`RoleAwareContextPlanner.plan()`，依角色與任務類型產生 `RetrievalPlan`）
+   * `services/token_budget_guard.js`（強制 3,000 Token 硬上限與三模式估算契約）
+3. **證據驗收與上下文編譯 (P1-C3.2)**：
+   * `services/evidence_admission.js`（`EvidenceAdmissionEngine`：單次 `fs.readFile` 讀取快照、UAX #31 `\p{ID_Continue}` 識別碼邊界、防洗白數值門禁）
+   * `services/context_compiler.js`（`ContextCompiler`：5 層確定性排序、XML CDATA 隔離封裝、2,000ms DLP Watchdog、裁剪後二次計量同源不變性）
+4. **隔離邊界與 90 格降級矩陣 (P1-C3.3)**：
+   * `services/isolation_boundary.js`（純 JS 隔離層：13 欄位 TLV 租戶隔離、`AdmissionReceipt`、`SourceProvenanceToken`、`decidePublication()` 90 格權威政策矩陣與 Fail-Closed 阻斷）
+   * 註：未編譯之 C++ Native 沙盒與 `ProcessLifecycleManager` 目前暫緩於 `forensics/` 備份，未納入主線。
+
+---
+
+## 2. 測試規範 (`npm test`)
+
+* **執行指令**：`npm test`（執行 `node tests/run_tests.js`）
+* **雙向完整性清單門禁 (Bidirectional Manifest Check)**：
+  * `tests/run_tests.js` 會掃描磁碟上的所有 `tests/*.js`（目前 42 個檔案），並強制核對是否已全數分類至 `OFFLINE_SUITES`（20 套）、`EXTERNAL_SUITES`（14 套）或 `UTILITY_SCRIPTS`（8 套）。
+  * **任何新增或移除測試檔，必須同步更新 `tests/run_tests.js`**，否則測試跑者將立即中止。
+* **離線測試基線**：提交任何變更前，必須確保全部 **20 / 20** 離線測試套件通過（`Exit Code: 0`）。
+* **測試假憑證衛生**：測試案例中若需測試 DLP 遮罩（如 Stripe Key 樣式），**嚴禁寫入連續字面量**，須改用執行期字串拼接（例如 `'sk_live_' + '1234...'`），以免觸發 GitHub Push Protection (`GH013`)。
+
+---
+
+## 3. 凍結模組邊界 (Frozen Modules Checkpoint)
+
+`tests/test_role_integration.js`（R12，比對 `b5a2daf`）與 `tests/test_async_task_integration.js`（T19，比對 `b789011`）強制保護以下 **6 個核心檔案** 不得任意修改：
+* `shared/global_state.js`
+* `registry/heartbeat_registry.js`
+* `services/router.js`
+* `infrastructure/adapters/error_mapper.js`
+* `infrastructure/clients/base_client.js`
+* `main.js`
+
+*(註：`services/cascading_executor.js` 已於 Phase 1-C4 正式解凍以接線 P1-C 管線；上述其餘 6 個檔案仍維持凍結保護。)*
+
+---
+
+## 4. 基礎設施與安全注意事項
+
+1. **Qdrant 向量維度鎖定**：使用 `text-embedding-004` 時必須嚴格鎖定 **768 維** 並於寫入/查詢端校驗維度，避免 Invalid Argument 連線失敗。
+2. **429 級聯容災**：當 AI Studio 發生 `429 Resource Exhausted` 時，級聯執行器須於 **200ms 內** 切換至 GCP Vertex AI 後備用戶端。
+3. **CIG 壓縮豁免**：`refactor` 與 `debug` 任務必須繞過 Context 壓縮以防代碼幻覺；僅在 `query` / `explain` 類任務啟用壓縮。
+4. **憑證零外洩**：`.env`、`*key*.json`、`gemini-api-ai-assistant-*.json` 與 `forensics/` 均已列於 `.gitignore`，嚴禁強制加入版控或貼入對話。
+
+---
+
+## 5. 歷史版本標籤參考
+
+* `v1.3.0-phase-3`（`ed1e7bb`, 2026-06-29）：早期經典版（已同步於 GitHub `origin/main`）。
+* `v1.4.0-phase-1-consolidated`（`e88276f`, 2026-11-04）：P0-B / P1-A / P1-B 整合版。
+* 本機 `main` 目前已整合 P1-C1 ～ P1-C4（待用戶明確指示後方可 `git push`）。
