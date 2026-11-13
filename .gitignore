@@ -29,3 +29,6 @@ tests/results/
 
 # Local cache
 .cache/
+
+# Forensic evidence & archived step reports
+forensics/

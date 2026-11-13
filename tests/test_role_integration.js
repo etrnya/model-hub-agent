@@ -150,7 +150,7 @@ async function runAll() {
       'services/router.js',
       'infrastructure/adapters/error_mapper.js',
       'infrastructure/clients/base_client.js',
-      'services/cascading_executor.js',
+      // 'services/cascading_executor.js' unfrozen in Phase 1-C4 for P1-C context pipeline wiring
       'main.js'
     ];
 

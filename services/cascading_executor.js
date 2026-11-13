@@ -6,7 +6,108 @@ const DeepSeekClient = require('../infrastructure/clients/deepseek_client');
 const VertexAIClient = require('../infrastructure/clients/vertex_ai_client');
 const CodeGraphAdapter = require('../infrastructure/adapters/codegraph_adapter');
 const verificationGate = require('./verification_gate');
+const { RoleAwareContextPlanner } = require('./context_planner');
+const { EvidenceAdmissionEngine } = require('./evidence_admission');
+const { ContextCompiler } = require('./context_compiler');
+const { TokenBudgetGuard } = require('./token_budget_guard');
+const guardrail = require('./guardrail_manager');
 const codegraph = new CodeGraphAdapter();
+
+/**
+ * Compiles verified CodeGraph context via RoleAwareContextPlanner -> EvidenceAdmissionEngine -> ContextCompiler.
+ * Returns null when the task provides no structured CodeGraph targets, avoiding crashes on general queries.
+ */
+async function compileCodeGraphContext(context, options = {}) {
+  const hasPlan = Boolean(context && context.retrievalPlan);
+  const hasTargets = Boolean(
+    context &&
+    ((Array.isArray(context.targetFiles) && context.targetFiles.length > 0) ||
+     (Array.isArray(context.targetSymbols) && context.targetSymbols.length > 0) ||
+     (Array.isArray(context.evidenceNodes) && context.evidenceNodes.length > 0))
+  );
+  if (!hasPlan && !hasTargets) {
+    return null;
+  }
+
+  let retrievalPlan = context.retrievalPlan;
+  if (!retrievalPlan) {
+    const planner = new RoleAwareContextPlanner();
+    retrievalPlan = await planner.plan(context.roleId || options.roleId || null, {
+      taskId: context.taskId || options.taskId || `task-${Date.now()}`,
+      objective: context.objective || 'CodeGraph context retrieval',
+      action: context.action || 'FEATURE',
+      targetFiles: context.targetFiles || [],
+      targetSymbols: context.targetSymbols || [],
+      maxExecutionTokens: context.maxExecutionTokens
+    });
+  }
+
+  // Ensure nodes carry a valid filePath when caller supplies targetFiles + string targetSymbols
+  if (!Array.isArray(retrievalPlan.nodes) || retrievalPlan.nodes.length === 0) {
+    if (Array.isArray(context.evidenceNodes) && context.evidenceNodes.length > 0) {
+      retrievalPlan = { ...retrievalPlan, nodes: context.evidenceNodes };
+    } else if (
+      Array.isArray(retrievalPlan.targetFiles) && retrievalPlan.targetFiles.length > 0 &&
+      Array.isArray(retrievalPlan.targetSymbols) && retrievalPlan.targetSymbols.length > 0
+    ) {
+      const defaultFile = retrievalPlan.targetFiles[0];
+      retrievalPlan = {
+        ...retrievalPlan,
+        nodes: retrievalPlan.targetSymbols.map((sym, idx) => ({
+          id: `ev-${String(idx + 1).padStart(2, '0')}`,
+          symbol: typeof sym === 'string' ? sym : (sym.symbol || sym.name),
+          filePath: (typeof sym === 'object' && sym.filePath) ? sym.filePath : defaultFile,
+          startLine: (typeof sym === 'object' && sym.startLine) ? sym.startLine : 1,
+          endLine: (typeof sym === 'object' && sym.endLine) ? sym.endLine : 60,
+          isCoreTarget: (typeof sym === 'object' && sym.isCoreTarget !== undefined) ? sym.isCoreTarget : (idx === 0),
+          relevanceScore: (typeof sym === 'object' && sym.relevanceScore !== undefined) ? sym.relevanceScore : (idx === 0 ? 1.0 : 0.6)
+        }))
+      };
+    }
+  }
+
+  const activeAdapter = options.codeGraphAdapter || codegraph;
+  const admissionEngine = new EvidenceAdmissionEngine({
+    codeGraphAdapter: activeAdapter,
+    workspaceRoot: options.workspaceRoot || process.cwd()
+  });
+  const compiler = new ContextCompiler({
+    admissionEngine,
+    tokenBudgetGuard: TokenBudgetGuard,
+    guardrailManager: guardrail,
+    codeGraphAdapter: activeAdapter
+  });
+
+  if (options.isolatedEnvelope || context.tenantId) {
+    const isoResult = await compiler.compileIsolatedEnvelope(
+      retrievalPlan,
+      {
+        taskId: context.taskId || options.taskId || `task-${Date.now()}`,
+        tenantId: context.tenantId || options.tenantId || 'default-tenant',
+        taskType: context.taskType || 'FEATURE_DEV'
+      },
+      options
+    );
+    if (isoResult.decision && (isoResult.decision.action === 'ABORT' || isoResult.decision.action === 'BLOCK')) {
+      throw new Error(`[ContextIsolation] Publication blocked (${isoResult.decision.action}): ${isoResult.decision.reason || 'Policy violation'}`);
+    }
+    return {
+      contextText: (isoResult.envelope && isoResult.envelope.contextText) || '',
+      metadata: {
+        decision: isoResult.decision,
+        admissionReceipt: isoResult.admissionReceipt,
+        provenanceToken: isoResult.provenanceToken
+      }
+    };
+  }
+
+  const action = context.action || retrievalPlan.taskCategory || (retrievalPlan.taskPolicy && retrievalPlan.taskPolicy.taskAction) || 'FEATURE';
+  const compResult = await compiler.compile(retrievalPlan, { action });
+  return {
+    contextText: compResult.contextText || '',
+    metadata: compResult.metadata || {}
+  };
+}
 
 /**
  * Detects required modalities based on objective keywords and tags.
@@ -144,15 +245,16 @@ class CascadingExecutor {
     const instinctManager = require('./instinct_manager');
     await instinctManager.injectRelevantInstincts(context);
 
-    // Inject CodeGraph context if not already present
+    // Inject compiled CodeGraph context if not already present
     if (!context.code_context) {
-      console.log(`\n🕸️  [CascadingExecutor] Running CodeGraph Pre-Query Context Injection...`);
-      const codeCtx = await codegraph.extractAndBuildRelations(context.objective, context.constraints);
-      if (codeCtx) {
-        context.code_context = codeCtx;
-        console.log(`✅ [CascadingExecutor] Injected ${codeCtx.length} chars of CodeGraph context.`);
+      console.log(`\n🕸️  [CascadingExecutor] Running CodeGraph Pre-Query Context Compilation...`);
+      const compiledCtx = await compileCodeGraphContext(context, options);
+      if (compiledCtx && compiledCtx.contextText) {
+        context.code_context = compiledCtx.contextText;
+        context.compiledContextMeta = compiledCtx.metadata;
+        console.log(`✅ [CascadingExecutor] Injected ${compiledCtx.contextText.length} chars of verified CodeGraph context.`);
       } else {
-        console.log(`ℹ️  [CascadingExecutor] No CodeGraph context found for this task.`);
+        console.log(`ℹ️  [CascadingExecutor] No structured CodeGraph targets provided; skipping context compilation.`);
       }
     }
     
@@ -197,7 +299,6 @@ class CascadingExecutor {
     const maxTaskBudgetUSD = parseFloat(process.env.MAX_TASK_BUDGET_USD || '0.05');
     const maxSessionBudgetUSD = parseFloat(process.env.MAX_SESSION_BUDGET_USD || '0.50');
     const tokenMonitor = require('../observability/token_monitor');
-    const guardrail = require('./guardrail_manager');
 
     // 2. Parallel Racing Pipeline (Module 2)
     const isRacing = options.race || (context.tags && context.tags.includes('realtime'));
@@ -700,4 +801,6 @@ class CascadingExecutor {
   }
 }
 
-module.exports = new CascadingExecutor();
+const executorInstance = new CascadingExecutor();
+executorInstance.compileCodeGraphContext = compileCodeGraphContext;
+module.exports = executorInstance;
