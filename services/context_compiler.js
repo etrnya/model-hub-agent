@@ -19,8 +19,159 @@ class ContextCompilationError extends Error {
 }
 
 /**
- * Escapes characters for XML attributes.
+ * UTF-16 Code Unit Deterministic String Ordering
+ * Cross-environment deterministic tie-breaker independent of OS locale.
  */
+function compareStringsDeterministically(a, b) {
+  if (a === b) return 0;
+  return a < b ? -1 : 1;
+}
+
+/**
+ * Direct numerical comparison (No float epsilon).
+ */
+function compareNumbersDirectly(a, b) {
+  if (a === b) return 0;
+  return b > a ? 1 : -1;
+}
+
+/**
+ * Computes Task Policy Rank (Higher Numeric Value = Higher Priority).
+ * Tier 1 Task Policy Priority:
+ * - SECURITY_AUDIT / REFACTOR: Trusted (SOURCE_MATCHED / CONTENT_VERIFIED) = 2, STALE = 1
+ * - BUG_FIX: isCoreTarget && Trusted = 3, Trusted = 2, STALE / UNVERIFIED = 1
+ * - FEATURE: Trusted = 3, STALE = 2, UNVERIFIED = 1
+ * - DOCUMENTATION: All = 1
+ */
+function getTaskPolicyRank(item, taskAction) {
+  const isTrusted = item.validationStatus === 'SOURCE_MATCHED' || item.validationStatus === 'CONTENT_VERIFIED';
+
+  if (taskAction === 'SECURITY_AUDIT' || taskAction === 'REFACTOR') {
+    return isTrusted ? 2 : 1;
+  }
+
+  if (taskAction === 'BUG_FIX') {
+    if (item.isCoreTarget && isTrusted) return 3;
+    if (isTrusted) return 2;
+    return 1;
+  }
+
+  if (taskAction === 'FEATURE') {
+    if (isTrusted) return 3;
+    if (item.validationStatus === 'STALE') return 2;
+    return 1;
+  }
+
+  // DOCUMENTATION: All items Policy Rank 1
+  return 1;
+}
+
+/**
+ * Preflight validation gate executed once prior to sorting.
+ * Verifies non-empty collection, valid taskAction, authorized statuses,
+ * strictly formatted and unique sourceEvidenceId, and finite relevanceScore in [0.0, 1.0].
+ */
+function validateEvidenceCollectionForSorting(items, taskAction) {
+  const AUTHORIZED_TASK_ACTIONS = Object.freeze([
+    'SECURITY_AUDIT',
+    'REFACTOR',
+    'BUG_FIX',
+    'FEATURE',
+    'DOCUMENTATION'
+  ]);
+
+  if (!AUTHORIZED_TASK_ACTIONS.includes(taskAction)) {
+    throw new ContextCompilationError('INVALID_TASK_ACTION', `taskAction "${taskAction}" is unauthorized. Must be one of: ${AUTHORIZED_TASK_ACTIONS.join(', ')}`);
+  }
+
+  if (!Array.isArray(items)) {
+    throw new ContextCompilationError('INVALID_INPUT', 'items must be an array');
+  }
+
+  const AUTHORIZED_STATUSES = Object.freeze(['SOURCE_MATCHED', 'CONTENT_VERIFIED', 'STALE', 'UNVERIFIED']);
+  const seenIds = new Set();
+  const EVIDENCE_ID_PATTERN = /^[A-Za-z0-9_-]+$/;
+
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i];
+    if (!item || typeof item !== 'object') {
+      throw new ContextCompilationError('INVALID_EVIDENCE_ITEM', `Evidence item at index ${i} is not an object.`);
+    }
+
+    // 1. sourceEvidenceId format and uniqueness
+    const id = item.sourceEvidenceId;
+    if (typeof id !== 'string' || id.length === 0 || id !== id.trim() || !EVIDENCE_ID_PATTERN.test(id)) {
+      throw new ContextCompilationError('INVALID_EVIDENCE_ID', `Item at index ${i} has invalid sourceEvidenceId: "${id}". Must be non-empty string matching /^[A-Za-z0-9_-]+$/ without whitespace.`);
+    }
+    if (seenIds.has(id)) {
+      throw new ContextCompilationError('DUPLICATE_EVIDENCE_ID', `Duplicate sourceEvidenceId "${id}" detected in sorting collection.`);
+    }
+    seenIds.add(id);
+
+    // 2. validationStatus preflight
+    const status = item.validationStatus;
+    if (status === 'MISMATCH' || status === 'OUT_OF_BOUNDS') {
+      throw new ContextCompilationError('REJECTED_EVIDENCE_IN_SORT', `Rejected evidence with status "${status}" must not enter sorting pipeline.`);
+    }
+    if (!AUTHORIZED_STATUSES.includes(status)) {
+      throw new ContextCompilationError('INVALID_EVIDENCE_STATUS', `Item "${id}" has unauthorized or unknown validationStatus: "${status}".`);
+    }
+
+    // 3. relevanceScore strict check (No fallback to 0)
+    const score = item.relevanceScore;
+    if (typeof score !== 'number' || !Number.isFinite(score) || score < 0.0 || score > 1.0) {
+      throw new ContextCompilationError('INVALID_RELEVANCE_SCORE', `Item "${id}" has invalid relevanceScore: ${score}. Must be a finite float in [0.0, 1.0].`);
+    }
+
+    // 4. isCoreTarget boolean check
+    if (typeof item.isCoreTarget !== 'boolean') {
+      throw new ContextCompilationError('INVALID_CORE_TARGET', `Item "${id}" isCoreTarget must be a boolean.`);
+    }
+  }
+}
+
+/**
+ * Validates token estimation against publishing gate invariants.
+ */
+function assertEnvelopePublishable(estimate, contextText) {
+  const HARD_CAP_LIMIT = 3000;
+  const AUTHORIZED_PUBLISH_METHODS = Object.freeze([
+    'EXACT_TOKENIZER',
+    'BYTE_LEVEL_BPE_THEORETICAL_UPPER_BOUND'
+  ]);
+
+  if (!estimate || typeof estimate !== 'object') {
+    throw new ContextCompilationError('TOKEN_BUDGET_UNVERIFIABLE', 'Token estimation returned non-object result.');
+  }
+
+  // 1. verifiable must be true
+  if (estimate.verifiable !== true) {
+    const code = estimate.errorCode || 'TOKEN_BUDGET_UNVERIFIABLE';
+    const msg = estimate.error || estimate.reason || 'Token estimation could not be verified by authorized profile.';
+    throw new ContextCompilationError(code, `[FAIL-CLOSED] ${msg}`);
+  }
+
+  // 2. tokens must be non-negative integer
+  const tokens = estimate.tokens;
+  if (typeof tokens !== 'number' || !Number.isFinite(tokens) || !Number.isInteger(tokens) || tokens < 0) {
+    throw new ContextCompilationError('TOKEN_BUDGET_UNVERIFIABLE', `Token count is not a valid non-negative integer: ${tokens}`);
+  }
+
+  // 3. Authorized methods restriction
+  if (!AUTHORIZED_PUBLISH_METHODS.includes(estimate.method)) {
+    throw new ContextCompilationError(
+      'TOKEN_BUDGET_UNVERIFIABLE',
+      `Method "${estimate.method}" is not authorized for hard cap context publication. Only Mode A (EXACT_TOKENIZER) or Mode B (BYTE_LEVEL_BPE_THEORETICAL_UPPER_BOUND) are permitted.`
+    );
+  }
+
+  // 4. Hard cap limit check
+  if (tokens > HARD_CAP_LIMIT) {
+    return { publishable: false, tokens, needPruning: true };
+  }
+
+  return { publishable: true, tokens, needPruning: false };
+}
 function escapeXmlAttribute(str) {
   if (typeof str !== 'string') return '';
   return str
@@ -109,29 +260,41 @@ class ContextCompiler {
   }
 
   /**
-   * 5-Tier Deterministic Sorting Algorithm
-   * 1. Task Policy Priority (presumed admitted)
-   * 2. validationStatus: VERIFIED (3) > STALE (2) > UNVERIFIED (1)
-   * 3. isCoreTarget: true (1) > false (0) (within same validationStatus only)
-   * 4. relevanceScore: descending (1.0 to 0.0)
-   * 5. sourceEvidenceId: ascending string localeCompare (tie-breaker)
+   * 5-Tier Deterministic Sorting Algorithm (Phase A Compliant)
+   * Tier 1: Task Policy Rank (getTaskPolicyRank: 3 > 2 > 1, higher = higher priority)
+   * Tier 2: validationStatus (SOURCE_MATCHED: 4 > CONTENT_VERIFIED: 3 > STALE: 2 > UNVERIFIED: 1)
+   * Tier 3: isCoreTarget (true = 1 > false = 0)
+   * Tier 4: relevanceScore (direct numerical comparison, no float epsilon)
+   * Tier 5: sourceEvidenceId (UTF-16 Code Unit Deterministic Ordering)
    */
-  sortEvidenceItems(items) {
-    const statusWeight = {
-      'VERIFIED': 3,
+  sortEvidenceItems(items, taskAction = 'FEATURE') {
+    // 1. Run Preflight Validation Gate
+    validateEvidenceCollectionForSorting(items, taskAction);
+
+    // 2. Discrete Validation Status Rank
+    const statusRank = {
+      'SOURCE_MATCHED': 4,
+      'CONTENT_VERIFIED': 3,
       'STALE': 2,
       'UNVERIFIED': 1
     };
 
     return [...items].sort((a, b) => {
-      // Tier 2: validationStatus
-      const weightA = statusWeight[a.validationStatus] || 0;
-      const weightB = statusWeight[b.validationStatus] || 0;
-      if (weightA !== weightB) {
-        return weightB - weightA;
+      // Tier 1: Task Policy Rank
+      const policyRankA = getTaskPolicyRank(a, taskAction);
+      const policyRankB = getTaskPolicyRank(b, taskAction);
+      if (policyRankA !== policyRankB) {
+        return policyRankB - policyRankA;
       }
 
-      // Tier 3: isCoreTarget (only within same validationStatus)
+      // Tier 2: validationStatus
+      const statusRankA = statusRank[a.validationStatus];
+      const statusRankB = statusRank[b.validationStatus];
+      if (statusRankA !== statusRankB) {
+        return statusRankB - statusRankA;
+      }
+
+      // Tier 3: isCoreTarget
       const coreA = a.isCoreTarget ? 1 : 0;
       const coreB = b.isCoreTarget ? 1 : 0;
       if (coreA !== coreB) {
@@ -139,14 +302,13 @@ class ContextCompiler {
       }
 
       // Tier 4: relevanceScore
-      const scoreA = typeof a.relevanceScore === 'number' ? a.relevanceScore : 0;
-      const scoreB = typeof b.relevanceScore === 'number' ? b.relevanceScore : 0;
-      if (Math.abs(scoreA - scoreB) > 0.0001) {
-        return scoreB - scoreA;
+      const scoreComp = compareNumbersDirectly(a.relevanceScore, b.relevanceScore);
+      if (scoreComp !== 0) {
+        return scoreComp;
       }
 
-      // Tier 5: sourceEvidenceId tie-breaker
-      return String(a.sourceEvidenceId).localeCompare(String(b.sourceEvidenceId));
+      // Tier 5: sourceEvidenceId UTF-16 Code Unit ordering
+      return compareStringsDeterministically(a.sourceEvidenceId, b.sourceEvidenceId);
     });
   }
 
@@ -191,6 +353,61 @@ class ContextCompiler {
       `]]>`,
       `</untrusted_code_context>`
     ].join('\n');
+  }
+
+  /**
+   * Serializes full envelope including headers, warnings, and XML evidence blocks.
+   * 
+   * @param {Array<object>} items 
+   * @param {string|null} degradedSnapshotWarning 
+   * @param {string} taskAction 
+   * @returns {string} Serialized envelope text
+   */
+  serializeFullEnvelope(items, degradedSnapshotWarning = null, taskAction = 'FEATURE') {
+    const serializedBlocks = [];
+
+    // Header warnings if applicable
+    if (degradedSnapshotWarning) {
+      serializedBlocks.push(degradedSnapshotWarning);
+    }
+
+    if (taskAction === 'SECURITY_AUDIT') {
+      const hasStaleOrUnverified = items.some(i => i.validationStatus !== 'SOURCE_MATCHED' && i.validationStatus !== 'CONTENT_VERIFIED');
+      if (hasStaleOrUnverified) {
+        serializedBlocks.push('⚠️ [SECURITY AUDIT INCONCLUSIVE: Target includes non-verified or stale code snippets. Current version cannot be certified secure.]');
+      }
+    }
+
+    for (const item of items) {
+      serializedBlocks.push(this.serializeEvidenceItem(item));
+    }
+
+    return serializedBlocks.join('\n\n');
+  }
+
+  /**
+   * Assembles the immutable, certified compilation result.
+   * Guaranteed: contextText is 100% identical to the measured context string.
+   */
+  assembleSuccessResult(finalContextText, verifiedEstimate, compiledItems, sessionSnapshotId, dlpRedactedCount, rejectedItems) {
+    return {
+      contextText: finalContextText,
+      measuredTokens: verifiedEstimate.tokens,
+      compiledItems,
+      rejectedItems: rejectedItems || [],
+      metadata: {
+        snapshotId: sessionSnapshotId,
+        totalItems: compiledItems.length,
+        dlpRedactedCount: dlpRedactedCount || 0,
+        rejectedCount: (rejectedItems || []).length,
+        hardCapLimit: 3000,
+        tokenAudit: {
+          measuredTokens: verifiedEstimate.tokens,
+          measurementMode: verifiedEstimate.method,
+          verifiable: verifiedEstimate.verifiable === true
+        }
+      }
+    };
   }
 
   /**
@@ -310,9 +527,13 @@ class ContextCompiler {
     }
 
     // 6. 5-Tier Deterministic Ranking
-    const sortedItems = this.sortEvidenceItems(sanitizedItems);
+    const sortedItems = this.sortEvidenceItems(sanitizedItems, taskAction);
 
     // 7. Token Budget Enforcement (Pruning on Sanitized Snippets)
+    if (!this.tokenBudgetGuard || typeof this.tokenBudgetGuard.enforceBudget !== 'function') {
+      throw new ContextCompilationError('TOKEN_BUDGET_UNVERIFIABLE', '[FAIL-CLOSED] TokenBudgetGuard does not implement enforceBudget method.');
+    }
+
     const budgetInput = sortedItems.map(item => ({
       ...item,
       snippet: item.sanitizedSnippet || item.rawSnippet || '',
@@ -341,80 +562,70 @@ class ContextCompiler {
       };
     });
 
-    // 8. Faithful Packaging & Serialization
-    const serializedBlocks = [];
+    // 8. Faithful Packaging & Initial Serialization
+    const initialContextText = this.serializeFullEnvelope(compiledItems, degradedSnapshotWarning, taskAction);
 
-    // Header warnings if applicable
-    if (degradedSnapshotWarning) {
-      serializedBlocks.push(degradedSnapshotWarning);
+    // 9. Final Token Audit on Whole Envelope (Phase A Remediation Pipeline - No Fallback)
+    if (!this.tokenBudgetGuard || typeof this.tokenBudgetGuard.estimateTokens !== 'function') {
+      throw new ContextCompilationError('TOKEN_BUDGET_UNVERIFIABLE', '[FAIL-CLOSED] TokenBudgetGuard does not implement authorized estimateTokens method.');
     }
 
-    if (taskAction === 'SECURITY_AUDIT') {
-      const hasStaleOrUnverified = compiledItems.some(i => i.validationStatus !== 'VERIFIED');
-      if (hasStaleOrUnverified) {
-        serializedBlocks.push('⚠️ [SECURITY AUDIT INCONCLUSIVE: Target includes non-verified or stale code snippets. Current version cannot be certified secure.]');
-      }
+    let firstEstimate;
+    try {
+      firstEstimate = this.tokenBudgetGuard.estimateTokens(initialContextText);
+    } catch (err) {
+      throw new ContextCompilationError('TOKEN_BUDGET_UNVERIFIABLE', `[FAIL-CLOSED] Token estimation threw error: ${err.message}`);
     }
 
+    const firstDecision = assertEnvelopePublishable(firstEstimate, initialContextText);
+
+    if (firstDecision.publishable) {
+      // 初次計量通過 -> 直接不可變同源發布初次序列化字串
+      const contextText = initialContextText;
+      return this.assembleSuccessResult(contextText, firstEstimate, compiledItems, sessionSnapshotId, dlpRedactedCount, admissionResult.rejectedEvidence);
+    }
+
+    // 超額處置分流
+    if (!firstDecision.needPruning) {
+      throw new ContextCompilationError('CORE_EVIDENCE_OVER_BUDGET', 'Context exceeds hard cap limit.');
+    }
+
+    const hasPeripheral = compiledItems.some(i => !i.isCoreTarget && i.contentCompleteness !== 'OMITTED');
+    if (!hasPeripheral) {
+      // 核心目標超額，無外圍可裁剪 -> 拋出 CORE_EVIDENCE_OVER_BUDGET
+      throw new ContextCompilationError('CORE_EVIDENCE_OVER_BUDGET', `Core evidence alone (${firstEstimate.tokens} tokens) strictly exceeds hard cap limit of ${hardCapLimit}.`);
+    }
+
+    // 執行 Emergency Pruning (非核心證據降級為最小 OMITTED 標籤)
     for (const item of compiledItems) {
-      serializedBlocks.push(this.serializeEvidenceItem(item));
-    }
-
-    let finalSerializedContext = serializedBlocks.join('\n\n');
-
-    // 9. Final Token Audit on Whole Envelope
-    const wholeEnvelopeEstimate = this.tokenBudgetGuard.estimateTokens ?
-      this.tokenBudgetGuard.estimateTokens(finalSerializedContext) :
-      { verifiable: true, tokens: Buffer.byteLength(finalSerializedContext, 'utf8') };
-
-    let finalMeasuredTokens = wholeEnvelopeEstimate.tokens || Buffer.byteLength(finalSerializedContext, 'utf8');
-
-    if (finalMeasuredTokens > hardCapLimit) {
-      // Attempt emergency pruning on peripheral items
-      const hasPeripheral = compiledItems.some(i => !i.isCoreTarget && i.contentCompleteness !== 'OMITTED');
-      if (hasPeripheral) {
-        // Strip non-core items
-        const prunedBlocks = [];
-        if (degradedSnapshotWarning) prunedBlocks.push(degradedSnapshotWarning);
-        if (taskAction === 'SECURITY_AUDIT' && compiledItems.some(i => i.validationStatus !== 'VERIFIED')) {
-          prunedBlocks.push('⚠️ [SECURITY AUDIT INCONCLUSIVE: Target includes non-verified or stale code snippets. Current version cannot be certified secure.]');
-        }
-
-        for (const item of compiledItems) {
-          if (!item.isCoreTarget) {
-            item.contentCompleteness = 'OMITTED';
-            item.isTruncated = true;
-            item.finalSnippet = '// [OMITTED: Pruned during final envelope budget compliance]';
-            item.emittedContentSha256 = crypto.createHash('sha256').update(item.finalSnippet, 'utf8').digest('hex');
-          }
-          prunedBlocks.push(this.serializeEvidenceItem(item));
-        }
-
-        finalSerializedContext = prunedBlocks.join('\n\n');
-        const recheck = this.tokenBudgetGuard.estimateTokens ?
-          this.tokenBudgetGuard.estimateTokens(finalSerializedContext) :
-          { tokens: Buffer.byteLength(finalSerializedContext, 'utf8') };
-        finalMeasuredTokens = recheck.tokens;
-      }
-
-      if (finalMeasuredTokens > hardCapLimit) {
-        throw new ContextCompilationError('CORE_EVIDENCE_OVER_BUDGET', `Final serialized context (${finalMeasuredTokens} tokens) exceeds hard cap limit of ${hardCapLimit} tokens.`);
+      if (!item.isCoreTarget) {
+        item.contentCompleteness = 'OMITTED';
+        item.isTruncated = true;
+        item.finalSnippet = '// [OMITTED: Pruned during emergency budget enforcement]';
+        item.emittedContentSha256 = crypto.createHash('sha256').update(item.finalSnippet, 'utf8').digest('hex');
       }
     }
 
-    return {
-      contextText: finalSerializedContext,
-      measuredTokens: finalMeasuredTokens,
-      compiledItems,
-      rejectedItems: admissionResult.rejectedEvidence,
-      metadata: {
-        snapshotId: sessionSnapshotId,
-        totalItems: compiledItems.length,
-        dlpRedactedCount,
-        rejectedCount: admissionResult.rejectedEvidence.length,
-        hardCapLimit
-      }
-    };
+    // 【必須重新序列化完整 Envelope】
+    const reSerializedContextText = this.serializeFullEnvelope(compiledItems, degradedSnapshotWarning, taskAction);
+
+    // 【必須二次計量】(ZERO Fallback, FAIL-CLOSED)
+    let secondEstimate;
+    try {
+      secondEstimate = this.tokenBudgetGuard.estimateTokens(reSerializedContextText);
+    } catch (err) {
+      throw new ContextCompilationError('TOKEN_BUDGET_UNVERIFIABLE', `[FAIL-CLOSED] Second token estimation threw error: ${err.message}`);
+    }
+    const secondDecision = assertEnvelopePublishable(secondEstimate, reSerializedContextText);
+
+    if (!secondDecision.publishable) {
+      // 二次計量超額 -> 拋出 CORE_EVIDENCE_OVER_BUDGET
+      throw new ContextCompilationError('CORE_EVIDENCE_OVER_BUDGET', `Pruned context (${secondEstimate.tokens} tokens) strictly exceeds hard cap limit.`);
+    }
+
+    // 【不可變同源發布】：保證 contextText === reSerializedContextText 100% 同源！
+    const contextText = reSerializedContextText;
+    return this.assembleSuccessResult(contextText, secondEstimate, compiledItems, sessionSnapshotId, dlpRedactedCount, admissionResult.rejectedEvidence);
   }
 }
 
@@ -422,5 +633,10 @@ module.exports = {
   ContextCompiler,
   ContextCompilationError,
   escapeXmlAttribute,
-  scanWithWatchdog
+  scanWithWatchdog,
+  assertEnvelopePublishable,
+  validateEvidenceCollectionForSorting,
+  getTaskPolicyRank,
+  compareStringsDeterministically,
+  compareNumbersDirectly
 };

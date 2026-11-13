@@ -10,6 +10,60 @@ const path = require('path');
 const fs = require('fs').promises;
 const crypto = require('crypto');
 
+/**
+ * Escapes characters for regular expressions.
+ * @param {string} string
+ * @returns {string}
+ */
+function escapeRegExp(string) {
+  if (typeof string !== 'string') return '';
+  return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * Strict integer parser rejecting floating point numbers, mixed strings, NaN, Infinity, etc.
+ * @param {any} val
+ * @returns {number|null} Safe integer or null if invalid
+ */
+function parseStrictInteger(val) {
+  if (typeof val === 'number') {
+    return Number.isSafeInteger(val) ? val : null;
+  }
+  if (typeof val === 'string') {
+    const trimmed = val.trim();
+    if (/^[0-9]+$/.test(trimmed)) {
+      const num = Number(trimmed);
+      return Number.isSafeInteger(num) ? num : null;
+    }
+  }
+  return null;
+}
+
+/**
+ * Safely matches a symbol against a code snippet using exact literal presence
+ * and escaped boundary check, preventing regex injection and symbol substring false positives.
+ * @param {string} snippet
+ * @param {string} symbol
+ * @returns {boolean}
+ */
+function matchSymbolInSnippet(snippet, symbol) {
+  if (typeof snippet !== 'string' || typeof symbol !== 'string' || symbol.length === 0) {
+    return false;
+  }
+  const cleanSymbol = symbol.split('::').pop();
+  if (!cleanSymbol || cleanSymbol.length === 0) {
+    return false;
+  }
+  // 1. Literal presence check (fail fast)
+  if (!snippet.includes(cleanSymbol)) {
+    return false;
+  }
+  // 2. Escaped boundary check with Unicode UAX #31 identifier continuation support
+  const escaped = escapeRegExp(cleanSymbol);
+  const pattern = new RegExp(`(^|[^\\p{ID_Continue}$])${escaped}([^\\p{ID_Continue}$]|$)`, 'u');
+  return pattern.test(snippet);
+}
+
 class EvidenceAdmissionError extends Error {
   constructor(code, message, details = {}) {
     super(`[${code}] ${message}`);
@@ -50,7 +104,9 @@ class EvidenceAdmissionEngine {
 
   /**
    * Evaluates a collection of candidate evidence nodes against physical files,
-   * AST line provenance, and task-specific admission policies.
+   * sandbox boundaries, and CodeGraph index snapshots without altering code snippets.
+   * Phase A Compliant: VERIFIED is strictly disabled; highest status is SOURCE_MATCHED.
+   * Single-read immutable evidence snapshot architecture.
    * 
    * @param {Array<object>} rawNodes - Raw candidate nodes from planner/graph
    * @param {string} indexSnapshotId - The locked snapshot ID for this compilation session
@@ -63,7 +119,8 @@ class EvidenceAdmissionEngine {
 
     const summary = {
       totalEvaluated: 0,
-      verifiedCount: 0,
+      sourceMatchedCount: 0,
+      contentVerifiedCount: 0,
       staleCount: 0,
       unverifiedCount: 0,
       rejectedMismatchCount: 0,
@@ -83,10 +140,33 @@ class EvidenceAdmissionEngine {
       const evidenceId = node.id || node.sourceEvidenceId || `ev-${String(i + 1).padStart(2, '0')}`;
       const symbol = node.symbol || node.name || 'anonymous';
       const filePath = node.filePath || '';
-      const startLine = Number(node.startLine || 1);
-      const endLine = Number(node.endLine || startLine);
+      
       const isCoreTarget = Boolean(node.isCoreTarget);
-      const relevanceScore = typeof node.relevanceScore === 'number' ? node.relevanceScore : (isCoreTarget ? 1.0 : 0.5);
+
+      // Relevance Score Strict Validation (BLOCKER SORT-R: Zero silent fallback for invalid scores)
+      let relevanceScore;
+      if (node.relevanceScore === undefined) {
+        relevanceScore = isCoreTarget ? 1.0 : 0.5;
+      } else if (
+        typeof node.relevanceScore === 'number' &&
+        Number.isFinite(node.relevanceScore) &&
+        node.relevanceScore >= 0.0 &&
+        node.relevanceScore <= 1.0
+      ) {
+        relevanceScore = node.relevanceScore;
+      } else {
+        summary.rejectedOutOfBoundsCount++;
+        rejectedEvidence.push({
+          sourceEvidenceId: evidenceId,
+          symbol,
+          filePath,
+          rejectionReason: 'OUT_OF_BOUNDS',
+          category: 'INVALID_RELEVANCE_SCORE',
+          details: `Invalid relevanceScore: ${node.relevanceScore}. Must be undefined or a finite float in [0.0, 1.0].`
+        });
+        continue;
+      }
+
       const isBinaryExpected = Boolean(node.forceBinary || node.evidenceType === 'BINARY' || filePath.endsWith('.bin') || filePath.endsWith('.png') || filePath.endsWith('.wasm'));
 
       // 1. Path Sandbox & Blacklist Check
@@ -106,72 +186,11 @@ class EvidenceAdmissionEngine {
         continue;
       }
 
-      // 2. Line Provenance & Hash Verification
-      let provenanceResult = null;
-      try {
-        if (!isBinaryExpected && this.callGraphEngine && typeof this.callGraphEngine.verifyLineProvenance === 'function') {
-          provenanceResult = await this.callGraphEngine.verifyLineProvenance(
-            { symbol, name: symbol, filePath, startLine, endLine },
-            {
-              filePath,
-              startLine,
-              endLine,
-              indexSnapshotId,
-              indexedFileSha256: node.indexedFileSha256 || null
-            }
-          );
-        } else {
-          // Direct fallback or Binary Asset evaluation (no AST symbol regex search for binary files)
-          const snapshot = await this.codeGraphAdapter.getFileIndexSnapshot(filePath);
-          const rawBuffer = await fs.readFile(realPath);
-          const fileSha256 = crypto.createHash('sha256').update(rawBuffer).digest('hex');
+      // 2. Line Number Strict Integer Bounds Check
+      const parsedStart = parseStrictInteger(node.startLine);
+      const parsedEnd = parseStrictInteger(node.endLine !== undefined ? node.endLine : node.startLine);
 
-          if (isBinaryExpected) {
-            provenanceResult = {
-              validationStatus: 'VERIFIED',
-              fileSha256,
-              snippetSha256: fileSha256,
-              confidence: 'HIGH',
-              reason: 'Binary asset verified from filesystem'
-            };
-          } else {
-            const fullContent = rawBuffer.toString('utf8');
-            const lines = fullContent.split(/\r?\n/);
-
-            if (startLine < 1 || endLine > lines.length || startLine > endLine) {
-              provenanceResult = { validationStatus: 'OUT_OF_BOUNDS', fileSha256, snippetSha256: '', reason: 'Lines out of bounds' };
-            } else {
-              const sliced = lines.slice(startLine - 1, endLine).join('\n');
-              const snippetSha256 = crypto.createHash('sha256').update(sliced, 'utf8').digest('hex');
-              const cleanSymbol = symbol.split('::').pop();
-              const symbolRegex = new RegExp(`\\b${cleanSymbol}\\b`);
-
-              if (!symbolRegex.test(sliced)) {
-                provenanceResult = { validationStatus: 'MISMATCH', fileSha256, snippetSha256, reason: 'Symbol drifted' };
-              } else if (!snapshot || !snapshot.contentHash) {
-                provenanceResult = { validationStatus: 'UNVERIFIED', fileSha256, snippetSha256, reason: 'Index snapshot absent' };
-              } else if (snapshot.contentHash !== fileSha256) {
-                provenanceResult = { validationStatus: 'STALE', fileSha256, snippetSha256, reason: 'File modified since index' };
-              } else {
-                provenanceResult = { validationStatus: 'VERIFIED', fileSha256, snippetSha256, reason: 'Verified with index snapshot' };
-              }
-            }
-          }
-        }
-      } catch (provErr) {
-        summary.unverifiedCount++;
-        provenanceResult = {
-          validationStatus: 'UNVERIFIED',
-          fileSha256: crypto.createHash('sha256').update('').digest('hex'),
-          snippetSha256: crypto.createHash('sha256').update('').digest('hex'),
-          confidence: 'LOW',
-          reason: `Verification failed: ${provErr.message}`
-        };
-      }
-
-      // 3. Status Mapping & Strict Rejection of MISMATCH / OUT_OF_BOUNDS
-      const rawStatus = provenanceResult.validationStatus;
-      if (rawStatus === 'OUT_OF_BOUNDS') {
+      if (parsedStart === null || parsedEnd === null || parsedStart < 1 || parsedEnd < parsedStart) {
         summary.rejectedOutOfBoundsCount++;
         rejectedEvidence.push({
           sourceEvidenceId: evidenceId,
@@ -179,43 +198,124 @@ class EvidenceAdmissionEngine {
           filePath,
           rejectionReason: 'OUT_OF_BOUNDS',
           category: 'COORDINATE_OVERFLOW',
-          details: provenanceResult.reason || 'Line range exceeds physical file lines.'
+          details: `Invalid line coordinates: startLine (${node.startLine}) and endLine (${node.endLine}) must be valid safe integers with startLine >= 1 and startLine <= endLine.`
         });
         continue;
       }
 
-      if (rawStatus === 'MISMATCH') {
-        summary.rejectedMismatchCount++;
+      const startLine = parsedStart;
+      const endLine = parsedEnd;
+
+      // 3. Single-Read Immutable Evidence Snapshot (Single I/O)
+      let rawBuffer = null;
+      let fileSha256 = '';
+      try {
+        rawBuffer = await fs.readFile(realPath);
+        fileSha256 = crypto.createHash('sha256').update(rawBuffer).digest('hex');
+      } catch (readErr) {
+        summary.unverifiedCount++;
         rejectedEvidence.push({
           sourceEvidenceId: evidenceId,
           symbol,
           filePath,
-          rejectionReason: 'MISMATCH',
-          category: 'SYMBOL_DRIFT',
-          details: provenanceResult.reason || `Target symbol "${symbol}" missing from specified lines.`
+          rejectionReason: 'FILE_READ_ERROR',
+          category: 'IO_ERROR',
+          details: `Failed to read physical file: ${readErr.message}`
         });
         continue;
       }
 
-      // Map to Admission Status
+      // 4. Binary vs Text Discrimination & Strict UTF-8 Decoding
+      let evidenceType = 'TEXT';
+      let encoding = 'text';
+      let decodedText = null;
+      let rawSnippet = '';
+      let snippetSha256 = '';
+      let isStrictUtf8 = false;
+
+      const hasNullByte = rawBuffer.includes(0x00);
+      if (!hasNullByte && !isBinaryExpected) {
+        try {
+          const strictDecoder = new TextDecoder('utf-8', { fatal: true });
+          decodedText = strictDecoder.decode(rawBuffer);
+          isStrictUtf8 = true;
+        } catch {
+          isStrictUtf8 = false;
+        }
+      }
+
+      const hasIllegalXmlChars = isStrictUtf8 && /[\x00-\x08\x0B\x0C\x0E-\x1F]/.test(decodedText);
+
+      if (isBinaryExpected || hasNullByte || !isStrictUtf8 || hasIllegalXmlChars) {
+        evidenceType = 'BINARY';
+        encoding = 'base64';
+        rawSnippet = rawBuffer.toString('base64');
+        snippetSha256 = fileSha256;
+      } else {
+        // Text slicing and line boundary check
+        const lines = decodedText.split(/\r?\n/);
+        if (endLine > lines.length) {
+          summary.rejectedOutOfBoundsCount++;
+          rejectedEvidence.push({
+            sourceEvidenceId: evidenceId,
+            symbol,
+            filePath,
+            rejectionReason: 'OUT_OF_BOUNDS',
+            category: 'COORDINATE_OVERFLOW',
+            details: `Coordinates [${startLine}, ${endLine}] exceed physical file bounds (1 to ${lines.length} lines)`
+          });
+          continue;
+        }
+
+        const slicedLines = lines.slice(startLine - 1, endLine);
+        rawSnippet = slicedLines.join('\n'); // Normalized to LF
+        snippetSha256 = crypto.createHash('sha256').update(rawSnippet, 'utf8').digest('hex');
+
+        // Symbol Feature Check (Word boundary match with escape protection)
+        const cleanSymbol = symbol.split('::').pop();
+        if (!matchSymbolInSnippet(rawSnippet, cleanSymbol)) {
+          summary.rejectedMismatchCount++;
+          rejectedEvidence.push({
+            sourceEvidenceId: evidenceId,
+            symbol,
+            filePath,
+            rejectionReason: 'MISMATCH',
+            category: 'SYMBOL_DRIFT',
+            details: `Target symbol "${cleanSymbol}" was NOT found in code lines [${startLine}, ${endLine}].`
+          });
+          continue;
+        }
+      }
+
+      // 5. Index Snapshot Freshness Check (Sole Route B - Zero verifyLineProvenance calls)
       let mappedStatus = 'UNVERIFIED';
-      let confidence = provenanceResult.confidence || 'LOW';
+      let confidence = 'LOW';
       let warning = null;
 
-      if (rawStatus === 'VERIFIED') {
-        mappedStatus = 'VERIFIED';
-        confidence = 'HIGH';
-      } else if (rawStatus === 'STALE') {
+      const snapshot = await this.codeGraphAdapter.getFileIndexSnapshot(filePath);
+
+      if (!snapshot || !snapshot.contentHash) {
+        mappedStatus = 'UNVERIFIED';
+        confidence = 'LOW';
+        warning = 'INDEX_RECORD_ABSENT';
+      } else if (snapshot.contentHash !== fileSha256) {
         mappedStatus = 'STALE';
         confidence = 'MEDIUM';
         warning = 'CONTENT_MODIFIED_SINCE_INDEX';
       } else {
-        mappedStatus = 'UNVERIFIED';
-        confidence = 'LOW';
-        warning = 'INDEX_RECORD_ABSENT';
+        // Physical Hash matches snapshot contentHash!
+        // In Phase A, VERIFIED is strictly disabled; highest attainable state is SOURCE_MATCHED (text only).
+        // Binary evidence cannot perform AST verification; strictly granted CONTENT_VERIFIED.
+        if (evidenceType === 'BINARY') {
+          mappedStatus = 'CONTENT_VERIFIED';
+          confidence = 'HIGH';
+        } else {
+          mappedStatus = 'SOURCE_MATCHED';
+          confidence = 'HIGH';
+        }
       }
 
-      // 4. Task-Specific Admission Policies
+      // 6. Admission Gate Task-Specific Policy Filtering
       if (taskAction === 'SECURITY_AUDIT') {
         if (mappedStatus === 'UNVERIFIED') {
           summary.rejectedDisallowedCount++;
@@ -247,63 +347,9 @@ class EvidenceAdmissionEngine {
         }
       }
 
-      // 5. Physical Reading & Binary Detection (D1 Contract)
-      let evidenceType = 'TEXT';
-      let encoding = 'text';
-      let rawSnippet = '';
-      let rawBuffer = null;
-      let rawByteLength = 0;
-      let sourceFileSha256 = provenanceResult.fileSha256;
-      let sourceSnippetSha256 = provenanceResult.snippetSha256;
-
-      try {
-        const fileStat = await fs.stat(realPath);
-        const fd = await fs.open(realPath, 'r');
-        try {
-          const probeSize = Math.min(fileStat.size, 8000);
-          const probeBuf = Buffer.alloc(probeSize);
-          await fd.read(probeBuf, 0, probeSize, 0);
-
-          const hasNullByte = probeBuf.includes(0x00);
-          const hasIllegalControl = /[\x01-\x08\x0B\x0C\x0E-\x1F]/.test(probeBuf.toString('binary'));
-
-          if (isBinaryExpected || hasNullByte || hasIllegalControl) {
-            evidenceType = 'BINARY';
-            encoding = 'base64';
-            rawBuffer = await fs.readFile(realPath);
-            rawByteLength = rawBuffer.length;
-            sourceFileSha256 = crypto.createHash('sha256').update(rawBuffer).digest('hex');
-            sourceSnippetSha256 = sourceFileSha256;
-            rawSnippet = rawBuffer.toString('base64');
-          } else {
-            evidenceType = 'TEXT';
-            encoding = 'text';
-            const fullContent = await fs.readFile(realPath, 'utf8');
-            sourceFileSha256 = crypto.createHash('sha256').update(fullContent, 'utf8').digest('hex');
-            const lines = fullContent.split(/\r?\n/);
-            const sliced = lines.slice(startLine - 1, endLine).join('\n');
-            rawSnippet = sliced;
-            rawByteLength = Buffer.byteLength(sliced, 'utf8');
-            sourceSnippetSha256 = crypto.createHash('sha256').update(sliced, 'utf8').digest('hex');
-          }
-        } finally {
-          await fd.close();
-        }
-      } catch (readErr) {
-        summary.unverifiedCount++;
-        rejectedEvidence.push({
-          sourceEvidenceId: evidenceId,
-          symbol,
-          filePath,
-          rejectionReason: 'FILE_READ_ERROR',
-          category: 'IO_ERROR',
-          details: `Failed to read physical file: ${readErr.message}`
-        });
-        continue;
-      }
-
-      // Update counters
-      if (mappedStatus === 'VERIFIED') summary.verifiedCount++;
+      // Update counters cleanly (No duplicate increments)
+      if (mappedStatus === 'SOURCE_MATCHED') summary.sourceMatchedCount++;
+      else if (mappedStatus === 'CONTENT_VERIFIED') summary.contentVerifiedCount++;
       else if (mappedStatus === 'STALE') summary.staleCount++;
       else summary.unverifiedCount++;
 
@@ -315,19 +361,19 @@ class EvidenceAdmissionEngine {
         evidenceType,
         encoding,
         rawSnippet,
-        snippet: rawSnippet, // For downstream token budget compatibility
-        rawBuffer: rawBuffer || undefined,
-        rawByteLength,
+        snippet: rawSnippet, // For downstream TokenBudgetGuard compatibility
+        rawBuffer: rawBuffer,
+        rawByteLength: rawBuffer.length,
         validationStatus: mappedStatus,
         confidence,
-        analysisCompleteness: mappedStatus === 'VERIFIED' ? 'COMPLETE' : 'PARTIAL',
+        analysisCompleteness: mappedStatus === 'SOURCE_MATCHED' ? 'COMPLETE' : 'PARTIAL',
         contentCompleteness: 'FULL',
         isTruncated: false,
         isCoreTarget,
         relevanceScore,
         warning,
-        sourceFileSha256,
-        sourceSnippetSha256
+        sourceFileSha256: fileSha256,
+        sourceSnippetSha256: snippetSha256
       });
     }
 
@@ -341,5 +387,8 @@ class EvidenceAdmissionEngine {
 
 module.exports = {
   EvidenceAdmissionEngine,
-  EvidenceAdmissionError
+  EvidenceAdmissionError,
+  escapeRegExp,
+  parseStrictInteger,
+  matchSymbolInSnippet
 };

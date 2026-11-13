@@ -100,8 +100,22 @@ async function runTests() {
   // ----------------------------------------------------
   console.log('[Section 1: EvidenceAdmissionEngine Line Provenance & Boundary Tests]');
 
-  // C3.2-T1: 實體檔案 Hash === SQLite 快照 Hash
+  // C3.2-T1 / INV-R1.1: 實體檔案 Hash === SQLite 快照 Hash -> SOURCE_MATCHED, fs.readFile = 1, verifyLineProvenance = 0
   try {
+    let provenanceCallCount = 0;
+    const originalVerify = callGraphEngine.verifyLineProvenance;
+    callGraphEngine.verifyLineProvenance = async (...args) => {
+      provenanceCallCount++;
+      return originalVerify ? await originalVerify.apply(callGraphEngine, args) : { verified: true };
+    };
+
+    let readFileCount = 0;
+    const originalReadFile = fs.readFile;
+    fs.readFile = async (...args) => {
+      readFileCount++;
+      return await originalReadFile.apply(fs, args);
+    };
+
     const rawNodes = [{
       id: 'ev-01',
       symbol: 'calculateTotal',
@@ -111,16 +125,49 @@ async function runTests() {
       isCoreTarget: true
     }];
 
-    const result = await admissionEngine.evaluateAdmission(rawNodes, 'snap-001', 'FEATURE');
+    let result;
+    try {
+      result = await admissionEngine.evaluateAdmission(rawNodes, 'snap-001', 'FEATURE');
+    } finally {
+      callGraphEngine.verifyLineProvenance = originalVerify;
+      fs.readFile = originalReadFile;
+    }
+
     assert.strictEqual(result.admittedEvidence.length, 1);
-    assert.strictEqual(result.admittedEvidence[0].validationStatus, 'VERIFIED');
+    assert.strictEqual(result.admittedEvidence[0].validationStatus, 'SOURCE_MATCHED');
     assert.strictEqual(result.admittedEvidence[0].confidence, 'HIGH');
     assert.strictEqual(result.admittedEvidence[0].contentCompleteness, 'FULL');
     assert.strictEqual(result.admittedEvidence[0].isTruncated, false);
     assert.strictEqual(result.admittedEvidence[0].sourceSnippetSha256.length, 64);
-    pass('C3.2-T1', 'Physical file hash matches snapshot hash -> VERIFIED with HIGH confidence');
+    assert.strictEqual(result.admittedEvidence[0].sourceFileSha256.length, 64);
+    assert.strictEqual(provenanceCallCount, 0, 'verifyLineProvenance must NEVER be called (0 calls)');
+    assert.strictEqual(readFileCount, 1, 'fs.readFile must be called EXACTLY ONCE (single physical read)');
+    pass('C3.2-T1', 'INV-R1.1: Physical file hash matches snapshot -> SOURCE_MATCHED, fs.readFile = 1, 0 calls to verifyLineProvenance');
   } catch (err) {
     fail('C3.2-T1', 'Physical file hash matches snapshot hash', err);
+  }
+
+  // INV-R1.4: VERIFIED 絕對停用 (禁冒用 AST 身分)
+  try {
+    const rawNodes = [{
+      id: 'ev-01-no-ast',
+      symbol: 'calculateTotal',
+      filePath: 'service.js',
+      startLine: 2,
+      endLine: 4,
+      astNodeId: 'ast-node-fake-999',
+      source: 'CODEGRAPH_AST',
+      kind: 'method',
+      isCoreTarget: true
+    }];
+
+    const result = await admissionEngine.evaluateAdmission(rawNodes, 'snap-001', 'FEATURE');
+    assert.strictEqual(result.admittedEvidence.length, 1);
+    assert.strictEqual(result.admittedEvidence[0].validationStatus, 'SOURCE_MATCHED', 'Must grant SOURCE_MATCHED, never VERIFIED');
+    assert.notStrictEqual(result.admittedEvidence[0].validationStatus, 'VERIFIED', 'VERIFIED status is strictly deactivated');
+    pass('INV-R1.4', 'VERIFIED status is strictly deactivated in Phase A; returns SOURCE_MATCHED');
+  } catch (err) {
+    fail('INV-R1.4', 'VERIFIED deactivated assertion', err);
   }
 
   // C3.2-T2: 實體檔案修改但 AST 特徵存在 -> STALE
@@ -264,11 +311,18 @@ async function runTests() {
     fail('C3.2-T7', 'Text CDATA preserves closing tags', err);
   }
 
-  // C3.2-T12: Base64 二進位模式往返測試 (切片含 NUL \0)
+  // C3.2-T12 / INV-BIN.1: Base64 二進位模式往返測試及 CONTENT_VERIFIED 狀態驗證
   try {
     const binaryData = Buffer.from([0x41, 0x42, 0x00, 0x43, 0xFF, 0xFE]);
     const binaryFilePath = path.join(testWorkspace, 'binary_asset.bin');
     await fs.writeFile(binaryFilePath, binaryData);
+    const binaryHash = crypto.createHash('sha256').update(binaryData).digest('hex');
+
+    // Case 1: Snapshot exists and matches physical hash -> CONTENT_VERIFIED (Strictly NEVER SOURCE_MATCHED)
+    mockSnapshots['binary_asset.bin'] = {
+      contentHash: binaryHash,
+      indexedAt: Date.now()
+    };
 
     const rawNodes = [{
       id: 'ev-12',
@@ -285,6 +339,19 @@ async function runTests() {
     assert.strictEqual(item.evidenceType, 'BINARY');
     assert.strictEqual(item.encoding, 'base64');
     assert.strictEqual(item.rawByteLength, 6);
+    assert.strictEqual(item.validationStatus, 'CONTENT_VERIFIED', 'Matching binary snapshot must yield CONTENT_VERIFIED');
+    assert.notStrictEqual(item.validationStatus, 'SOURCE_MATCHED', 'Binary evidence must NEVER be granted SOURCE_MATCHED');
+    assert.strictEqual(item.confidence, 'HIGH');
+    assert.strictEqual(item.analysisCompleteness, 'PARTIAL');
+
+    // Case 2: Snapshot is absent -> UNVERIFIED
+    delete mockSnapshots['binary_asset.bin'];
+    const resultNoSnap = await admissionEngine.evaluateAdmission(rawNodes, 'snap-001', 'FEATURE');
+    assert.strictEqual(resultNoSnap.admittedEvidence.length, 1);
+    assert.strictEqual(resultNoSnap.admittedEvidence[0].validationStatus, 'UNVERIFIED', 'Missing binary snapshot must yield UNVERIFIED');
+
+    // Restore snapshot
+    mockSnapshots['binary_asset.bin'] = { contentHash: binaryHash, indexedAt: Date.now() };
 
     // Serialization
     const xml = compiler.serializeEvidenceItem(item);
@@ -295,7 +362,7 @@ async function runTests() {
     const base64Str = item.rawSnippet;
     const restoredBuf = Buffer.from(base64Str, 'base64');
     assert.deepStrictEqual(restoredBuf, binaryData);
-    pass('C3.2-T12', 'Binary asset with NUL byte encodes to Base64 with 100% reversible byte fidelity');
+    pass('C3.2-T12', 'Binary asset encodes to Base64, verified as CONTENT_VERIFIED (never SOURCE_MATCHED) when snapshot matches, and UNVERIFIED when snapshot absent');
   } catch (err) {
     fail('C3.2-T12', 'Binary Base64 roundtrip fidelity', err);
   }
@@ -502,7 +569,7 @@ async function runTests() {
         lineEnd: 10,
         snippet: 'function CoreTarget() { return 1; }',
         isCoreTarget: true,
-        validationStatus: 'VERIFIED',
+        validationStatus: 'SOURCE_MATCHED',
         sourceSnippetSha256: originalHash,
         depth: 0
       },
@@ -513,7 +580,7 @@ async function runTests() {
         lineEnd: 20,
         snippet: 'function SecondaryCaller() {\n  // line 1\n  // line 2\n  return CoreTarget();\n}',
         isCoreTarget: false,
-        validationStatus: 'VERIFIED',
+        validationStatus: 'SOURCE_MATCHED',
         sourceSnippetSha256: 'c'.repeat(64),
         depth: 1
       },
@@ -524,7 +591,7 @@ async function runTests() {
         lineEnd: 30,
         snippet: 'function DistantLeaf() {\n  ' + '// line\n'.repeat(25) + '}',
         isCoreTarget: false,
-        validationStatus: 'VERIFIED',
+        validationStatus: 'SOURCE_MATCHED',
         sourceSnippetSha256: 'd'.repeat(64),
         depth: 2
       }
@@ -542,7 +609,7 @@ async function runTests() {
     fail('C3.2-T10', 'Pruning ladder integration', err);
   }
 
-  // C3.2-T11: 核心目標符號本體超額 Fail-Closed
+  // C3.2-T11 / INV-R2.4: 核心目標符號本體超額 Fail-Closed
   try {
     const giantSnippet = 'class Giant {\n' + '  massiveMethod() { return 42; }\n'.repeat(250) + '}';
     const items = [{
@@ -561,7 +628,33 @@ async function runTests() {
     const tightRes = tightGuard.enforceBudget(items, 100);
     assert.strictEqual(tightRes.success, false);
     assert.strictEqual(tightRes.errorCode, 'CORE_EVIDENCE_OVER_BUDGET');
-    pass('C3.2-T11', 'Core evidence exceeding budget returns CORE_EVIDENCE_OVER_BUDGET (Fail-Closed)');
+
+    // Also assert that Compiler throws CORE_EVIDENCE_OVER_BUDGET without corrupting core item
+    const tightCompiler = new ContextCompiler({
+      admissionEngine,
+      tokenBudgetGuard: tightGuard,
+      guardrailManager,
+      codeGraphAdapter: adapter
+    });
+
+    let caughtCoreOverBudget = false;
+    try {
+      await tightCompiler.compile({
+        nodes: [{
+          id: 'ev-giant',
+          symbol: 'Giant',
+          filePath: 'service.js',
+          startLine: 1,
+          endLine: 4,
+          isCoreTarget: true,
+          relevanceScore: 1.0
+        }]
+      });
+    } catch (e) {
+      if (e.code === 'CORE_EVIDENCE_OVER_BUDGET') caughtCoreOverBudget = true;
+    }
+    assert.strictEqual(caughtCoreOverBudget, true, 'Compiler must throw CORE_EVIDENCE_OVER_BUDGET when core target exceeds budget');
+    pass('C3.2-T11', 'INV-R2.4: Core evidence exceeding budget returns CORE_EVIDENCE_OVER_BUDGET (Fail-Closed, no truncation)');
   } catch (err) {
     fail('C3.2-T11', 'Core evidence over budget fail-closed', err);
   }
@@ -585,6 +678,178 @@ async function runTests() {
     pass('C3.2-T16', 'ContextCompiler enforces final whole-envelope budget <= 3000 tokens after DLP expansion');
   } catch (err) {
     fail('C3.2-T16', 'Post-DLP expansion token enforcement', err);
+  }
+
+  // INV-R2.1: Token 不可驗證零放行 (發布函式阻斷)
+  try {
+    const unverifiedGuard = {
+      enforceBudget(items, cap) {
+        return { success: true, retainedItems: items, notices: [] };
+      },
+      estimateTokens(text) {
+        return {
+          verifiable: false,
+          tokens: 0,
+          errorCode: 'TOKEN_BUDGET_UNVERIFIABLE',
+          error: 'Estimation failed profile verification'
+        };
+      }
+    };
+
+    const failClosedCompiler = new ContextCompiler({
+      admissionEngine,
+      tokenBudgetGuard: unverifiedGuard,
+      guardrailManager,
+      codeGraphAdapter: adapter
+    });
+
+    const plan = {
+      nodes: [{
+        id: 'ev-fail-closed',
+        symbol: 'calculateTotal',
+        filePath: 'service.js',
+        startLine: 2,
+        endLine: 4,
+        isCoreTarget: true,
+        relevanceScore: 1.0
+      }]
+    };
+
+    let caughtError = null;
+    let compRes = null;
+    try {
+      compRes = await failClosedCompiler.compile(plan, { action: 'FEATURE' });
+    } catch (e) {
+      caughtError = e;
+    }
+
+    assert.ok(caughtError, 'Must throw when estimateTokens returns verifiable: false');
+    assert.strictEqual(caughtError.code, 'TOKEN_BUDGET_UNVERIFIABLE');
+    assert.strictEqual(compRes, null, 'Context result must NOT be generated when estimation is unverifiable');
+    pass('INV-R2.1', 'Token unverifiable zero pass: throws TOKEN_BUDGET_UNVERIFIABLE and blocks context publication');
+  } catch (err) {
+    fail('INV-R2.1', 'Token unverifiable zero pass', err);
+  }
+
+  // INV-R2.2A: 合法空字串度量放行 (度量層級)
+  try {
+    const exactGuard = new TokenBudgetGuard({
+      hardCapLimit: 3000,
+      mode: 'exact',
+      tokenizerAdapter: {
+        countTokens: (text) => text.length === 0 ? 0 : Math.ceil(text.length / 4)
+      },
+      tokenizerProfile: 'TIKTOKEN_CL100K'
+    });
+    const estimate = exactGuard.estimateTokens('');
+    assert.strictEqual(estimate.verifiable, true, 'Empty string must be verifiable');
+    assert.strictEqual(estimate.tokens, 0, 'Empty string token count must be 0');
+    assert.strictEqual(estimate.method, 'EXACT_TOKENIZER');
+    pass('INV-R2.2A', 'Legal empty string measurement returns verifiable: true and tokens: 0');
+  } catch (err) {
+    fail('INV-R2.2A', 'Legal empty string measurement', err);
+  }
+
+  // INV-R2.2B: 空 Context 發布資格審計 (發布層級)
+  try {
+    const emptyGuard = new TokenBudgetGuard({
+      hardCapLimit: 3000,
+      mode: 'exact',
+      tokenizerAdapter: {
+        countTokens: (text) => text.trim().length === 0 ? 0 : 10
+      },
+      tokenizerProfile: 'TIKTOKEN_CL100K'
+    });
+    const emptyCompiler = new ContextCompiler({
+      admissionEngine,
+      tokenBudgetGuard: emptyGuard,
+      guardrailManager,
+      codeGraphAdapter: adapter
+    });
+    const emptyPlan = { nodes: [] };
+    const emptyCompRes = await emptyCompiler.compile(emptyPlan, { action: 'FEATURE' });
+    assert.strictEqual(emptyCompRes.measuredTokens, 0);
+    assert.strictEqual(emptyCompRes.compiledItems.length, 0);
+    assert.strictEqual(emptyCompRes.metadata.tokenAudit.verifiable, true);
+    assert.strictEqual(emptyCompRes.metadata.tokenAudit.measuredTokens, 0);
+    pass('INV-R2.2B', 'Empty context publication qualifies and is published with measuredTokens: 0');
+  } catch (err) {
+    fail('INV-R2.2B', 'Empty context publication qualification', err);
+  }
+
+  // INV-R2.3: 裁剪後二次計量保真與同源字串 (3,500 -> 2,200 tokens)
+  try {
+    let estimateCallCount = 0;
+    const callInputs = [];
+
+    const mockTwoPassGuard = {
+      enforceBudget(items, cap) {
+        return { success: true, retainedItems: items, notices: [] };
+      },
+      estimateTokens(text) {
+        estimateCallCount++;
+        callInputs.push(text);
+        if (estimateCallCount === 1) {
+          // 初始 Envelope 超額 (3,500 tokens)
+          return {
+            verifiable: true,
+            tokens: 3500,
+            method: 'BYTE_LEVEL_BPE_THEORETICAL_UPPER_BOUND'
+          };
+        } else {
+          // 裁剪後二次計量 (2,200 tokens)
+          return {
+            verifiable: true,
+            tokens: 2200,
+            method: 'BYTE_LEVEL_BPE_THEORETICAL_UPPER_BOUND'
+          };
+        }
+      }
+    };
+
+    const twoPassCompiler = new ContextCompiler({
+      admissionEngine,
+      tokenBudgetGuard: mockTwoPassGuard,
+      guardrailManager,
+      codeGraphAdapter: adapter
+    });
+
+    const twoPassPlan = {
+      nodes: [
+        {
+          id: 'ev-core-target',
+          symbol: 'calculateTotal',
+          filePath: 'service.js',
+          startLine: 2,
+          endLine: 4,
+          isCoreTarget: true,
+          relevanceScore: 1.0
+        },
+        {
+          id: 'ev-peripheral',
+          symbol: 'processPayment',
+          filePath: 'service.js',
+          startLine: 5,
+          endLine: 7,
+          isCoreTarget: false,
+          relevanceScore: 0.5
+        }
+      ]
+    };
+
+    const compRes = await twoPassCompiler.compile(twoPassPlan, { action: 'FEATURE' });
+
+    assert.strictEqual(estimateCallCount, 2, 'estimateTokens must be called exactly twice');
+    assert.notStrictEqual(callInputs[0], callInputs[1], 'Second measurement input must differ from first');
+    assert.ok(callInputs[1].includes('// [OMITTED: Pruned during emergency budget enforcement]'), 'Second input must contain pruned envelope');
+    assert.strictEqual(compRes.measuredTokens, 2200, 'Measured tokens must be 2200');
+    assert.strictEqual(compRes.metadata.tokenAudit.measuredTokens, 2200, 'Audit metadata tokens must match 2200');
+    assert.strictEqual(compRes.metadata.tokenAudit.verifiable, true, 'Audit verifiable must be true');
+    // 【最核心不變量斷言】：最終回傳物件 contextText 100% 同源於第二次輸入字串！
+    assert.strictEqual(compRes.contextText, callInputs[1], 'Final contextText MUST be 100% strictly equal to the second measurement input');
+    pass('INV-R2.3', 'Post-pruning second measurement: called twice, 2200 tokens, and contextText is 100% identical to second measurement input');
+  } catch (err) {
+    fail('INV-R2.3', 'Post-pruning second measurement', err);
   }
 
   // ----------------------------------------------------
@@ -611,6 +876,7 @@ async function runTests() {
             validationStatus: 'STALE',
             warning: 'HISTORICAL_ONLY_CANNOT_CERTIFY_SECURITY',
             isCoreTarget: false,
+            relevanceScore: 0.8,
             sourceFileSha256: 'a'.repeat(64),
             sourceSnippetSha256: 'a'.repeat(64)
           }],
@@ -706,24 +972,439 @@ async function runTests() {
   try {
     const testItems = [
       { sourceEvidenceId: 'ev-03', validationStatus: 'STALE', isCoreTarget: true, relevanceScore: 1.0 },
-      { sourceEvidenceId: 'ev-01', validationStatus: 'VERIFIED', isCoreTarget: false, relevanceScore: 0.1 },
-      { sourceEvidenceId: 'ev-02', validationStatus: 'VERIFIED', isCoreTarget: true, relevanceScore: 0.9 },
+      { sourceEvidenceId: 'ev-01', validationStatus: 'SOURCE_MATCHED', isCoreTarget: false, relevanceScore: 0.1 },
+      { sourceEvidenceId: 'ev-02', validationStatus: 'SOURCE_MATCHED', isCoreTarget: true, relevanceScore: 0.9 },
       { sourceEvidenceId: 'ev-05', validationStatus: 'UNVERIFIED', isCoreTarget: true, relevanceScore: 1.0 },
-      { sourceEvidenceId: 'ev-04a', validationStatus: 'VERIFIED', isCoreTarget: false, relevanceScore: 0.5 },
-      { sourceEvidenceId: 'ev-04b', validationStatus: 'VERIFIED', isCoreTarget: false, relevanceScore: 0.5 }
+      { sourceEvidenceId: 'ev-04a', validationStatus: 'SOURCE_MATCHED', isCoreTarget: false, relevanceScore: 0.5 },
+      { sourceEvidenceId: 'ev-04b', validationStatus: 'SOURCE_MATCHED', isCoreTarget: false, relevanceScore: 0.5 }
     ];
 
-    const sorted = compiler.sortEvidenceItems(testItems);
+    const sorted = compiler.sortEvidenceItems(testItems, 'FEATURE');
 
-    assert.strictEqual(sorted[0].sourceEvidenceId, 'ev-02', 'VERIFIED core target comes first');
-    assert.strictEqual(sorted[1].sourceEvidenceId, 'ev-04a', 'VERIFIED higher score comes before lower score');
+    assert.strictEqual(sorted[0].sourceEvidenceId, 'ev-02', 'SOURCE_MATCHED core target comes first');
+    assert.strictEqual(sorted[1].sourceEvidenceId, 'ev-04a', 'SOURCE_MATCHED higher score comes before lower score');
     assert.strictEqual(sorted[2].sourceEvidenceId, 'ev-04b', 'Same score tied by sourceEvidenceId a < b');
-    assert.strictEqual(sorted[3].sourceEvidenceId, 'ev-01', 'VERIFIED low score still comes before STALE');
-    assert.strictEqual(sorted[4].sourceEvidenceId, 'ev-03', 'STALE comes after all VERIFIED');
+    assert.strictEqual(sorted[3].sourceEvidenceId, 'ev-01', 'SOURCE_MATCHED low score still comes before STALE');
+    assert.strictEqual(sorted[4].sourceEvidenceId, 'ev-03', 'STALE comes after all SOURCE_MATCHED');
     assert.strictEqual(sorted[5].sourceEvidenceId, 'ev-05', 'UNVERIFIED comes last');
-    pass('C3.2-T22', '5-Tier deterministic ranking strictly enforces Validity > Core > Relevance > Tie-Breaker ID');
+    pass('C3.2-T22', '5-Tier deterministic ranking strictly enforces Policy > Validity > Core > Relevance > Tie-Breaker ID');
   } catch (err) {
     fail('C3.2-T22', '5-Tier ranking and tie-breaker', err);
+  }
+
+  // INV-SORT.1: 排序預檢門禁攔截無效輸入
+  try {
+    // 1. Illegal relevanceScore (NaN)
+    let caughtNan = false;
+    try {
+      compiler.sortEvidenceItems([
+        { sourceEvidenceId: 'ev-01', validationStatus: 'SOURCE_MATCHED', isCoreTarget: true, relevanceScore: NaN }
+      ]);
+    } catch (e) {
+      if (e.code === 'INVALID_RELEVANCE_SCORE') caughtNan = true;
+    }
+    assert.strictEqual(caughtNan, true, 'Must reject NaN relevanceScore');
+
+    // 2. Duplicate ID
+    let caughtDuplicate = false;
+    try {
+      compiler.sortEvidenceItems([
+        { sourceEvidenceId: 'ev-dup', validationStatus: 'SOURCE_MATCHED', isCoreTarget: true, relevanceScore: 0.8 },
+        { sourceEvidenceId: 'ev-dup', validationStatus: 'SOURCE_MATCHED', isCoreTarget: false, relevanceScore: 0.5 }
+      ]);
+    } catch (e) {
+      if (e.code === 'DUPLICATE_EVIDENCE_ID') caughtDuplicate = true;
+    }
+    assert.strictEqual(caughtDuplicate, true, 'Must reject duplicate sourceEvidenceId');
+
+    // 3. ID with space or newline
+    let caughtWhitespace = false;
+    try {
+      compiler.sortEvidenceItems([
+        { sourceEvidenceId: 'ev 01', validationStatus: 'SOURCE_MATCHED', isCoreTarget: true, relevanceScore: 0.8 }
+      ]);
+    } catch (e) {
+      if (e.code === 'INVALID_EVIDENCE_ID') caughtWhitespace = true;
+    }
+    assert.strictEqual(caughtWhitespace, true, 'Must reject sourceEvidenceId with space');
+
+    let caughtNewline = false;
+    try {
+      compiler.sortEvidenceItems([
+        { sourceEvidenceId: 'ev-01\n', validationStatus: 'SOURCE_MATCHED', isCoreTarget: true, relevanceScore: 0.8 }
+      ]);
+    } catch (e) {
+      if (e.code === 'INVALID_EVIDENCE_ID') caughtNewline = true;
+    }
+    assert.strictEqual(caughtNewline, true, 'Must reject sourceEvidenceId with newline');
+
+    // 4. Unauthorized validationStatus
+    let caughtStatus = false;
+    try {
+      compiler.sortEvidenceItems([
+        { sourceEvidenceId: 'ev-bad-status', validationStatus: 'VERIFIED', isCoreTarget: true, relevanceScore: 0.8 }
+      ]);
+    } catch (e) {
+      if (e.code === 'INVALID_EVIDENCE_STATUS') caughtStatus = true;
+    }
+    assert.strictEqual(caughtStatus, true, 'Must reject VERIFIED status in sorting preflight');
+
+    pass('INV-SORT.1', 'Sorting preflight strictly catches NaN score, duplicate ID, whitespace ID, and unauthorized status');
+  } catch (err) {
+    fail('INV-SORT.1', 'Sorting preflight validation gate', err);
+  }
+
+  // INV-SORT.2: Task Policy 絕對優先權 (Tier 1 覆蓋)
+  try {
+    const items = [
+      {
+        sourceEvidenceId: 'ev-stale-core',
+        validationStatus: 'STALE',
+        isCoreTarget: true,
+        relevanceScore: 1.0
+      },
+      {
+        sourceEvidenceId: 'ev-matched-leaf',
+        validationStatus: 'SOURCE_MATCHED',
+        isCoreTarget: false,
+        relevanceScore: 0.1
+      }
+    ];
+
+    // In SECURITY_AUDIT, SOURCE_MATCHED has Policy Rank 2, STALE has Policy Rank 1
+    const sorted = compiler.sortEvidenceItems(items, 'SECURITY_AUDIT');
+    assert.strictEqual(sorted[0].sourceEvidenceId, 'ev-matched-leaf', 'SOURCE_MATCHED (Policy Rank 2) must be ranked first');
+    assert.strictEqual(sorted[1].sourceEvidenceId, 'ev-stale-core', 'STALE (Policy Rank 1) must be suppressed despite core=true and score=1.0');
+
+    pass('INV-SORT.2', 'Task Policy Rank Tier 1 strictly overrides validationStatus, coreTarget, and relevanceScore');
+  } catch (err) {
+    fail('INV-SORT.2', 'Task policy rank precedence', err);
+  }
+
+  // INV-TOKEN.1: 無估算器或估算器異常時 Fail-Closed 拋出 TOKEN_BUDGET_UNVERIFIABLE (BLOCKER A3)
+  try {
+    const unverifiedGuard = {
+      enforceBudget: (items) => ({ success: true, retainedItems: items, notices: [] })
+      // missing estimateTokens!
+    };
+
+    const unverifiedCompiler = new ContextCompiler({
+      admissionEngine,
+      tokenBudgetGuard: unverifiedGuard,
+      guardrailManager,
+      codeGraphAdapter: adapter,
+      callGraphEngine
+    });
+
+    const rawNodes = [{
+      id: 'ev-token-fail',
+      symbol: 'calculateTotal',
+      filePath: 'service.js',
+      startLine: 2,
+      endLine: 4,
+      isCoreTarget: true
+    }];
+
+    let threwExpected = false;
+    let thrownError = null;
+    try {
+      await unverifiedCompiler.compile({ nodes: rawNodes, indexSnapshotId: 'snap-001' }, { action: 'FEATURE' });
+    } catch (err) {
+      if (err.code === 'TOKEN_BUDGET_UNVERIFIABLE') {
+        threwExpected = true;
+        thrownError = err;
+      }
+    }
+
+    assert.strictEqual(threwExpected, true, 'Must throw TOKEN_BUDGET_UNVERIFIABLE when estimateTokens is absent');
+    assert.ok(thrownError.message.includes('FAIL-CLOSED'), 'Error message must specify FAIL-CLOSED');
+
+    // Also test throwing error inside estimateTokens
+    const throwingGuard = {
+      enforceBudget: (items) => ({ success: true, retainedItems: items, notices: [] }),
+      estimateTokens: () => { throw new Error('Token engine failure'); }
+    };
+
+    const throwingCompiler = new ContextCompiler({
+      admissionEngine,
+      tokenBudgetGuard: throwingGuard,
+      guardrailManager,
+      codeGraphAdapter: adapter,
+      callGraphEngine
+    });
+
+    let threwThrowing = false;
+    try {
+      await throwingCompiler.compile({ nodes: rawNodes, indexSnapshotId: 'snap-001' }, { action: 'FEATURE' });
+    } catch (err) {
+      if (err.code === 'TOKEN_BUDGET_UNVERIFIABLE') {
+        threwThrowing = true;
+      }
+    }
+    assert.strictEqual(threwThrowing, true, 'Must throw TOKEN_BUDGET_UNVERIFIABLE when estimateTokens throws error');
+
+    // Also test null tokenBudgetGuard rejected at construction
+    assert.throws(() => {
+      new ContextCompiler({
+        admissionEngine,
+        tokenBudgetGuard: null,
+        guardrailManager,
+        codeGraphAdapter: adapter,
+        callGraphEngine
+      });
+    }, (err) => err.code === 'MISSING_DEPENDENCY');
+
+    pass('INV-TOKEN.1', 'Fail-Closed: compiler strictly throws TOKEN_BUDGET_UNVERIFIABLE and blocks context output without fallback');
+  } catch (err) {
+    fail('INV-TOKEN.1', 'Fail-Closed token budget verification', err);
+  }
+
+  // INV-SYM.1: 特殊符號、正則特殊字元與 Unicode 邊界防注入測試 (BLOCKER A2)
+  try {
+    const { escapeRegExp, matchSymbolInSnippet } = require('../services/evidence_admission');
+
+    // 1. escapeRegExp verification
+    assert.strictEqual(escapeRegExp('foo.bar'), 'foo\\.bar');
+    assert.strictEqual(escapeRegExp('.*'), '\\.\\*');
+    assert.strictEqual(escapeRegExp('calc(Total)'), 'calc\\(Total\\)');
+    assert.strictEqual(escapeRegExp('price$'), 'price\\$');
+
+    // 2. matchSymbolInSnippet injection prevention
+    const codeSample = 'function processData() {\n  const fooXbar = 10;\n  const total = 100;\n  return fooXbar + total;\n}';
+    
+    // '.*' must NOT match anything just because it is a wildcard
+    assert.strictEqual(matchSymbolInSnippet(codeSample, '.*'), false, 'Regex wildcard .* must NOT match text');
+    
+    // 'foo.bar' must NOT match 'fooXbar'
+    assert.strictEqual(matchSymbolInSnippet(codeSample, 'foo.bar'), false, 'foo.bar must NOT match fooXbar');
+
+    // Substring should not match if token boundary doesn't align
+    assert.strictEqual(matchSymbolInSnippet(codeSample, 'process'), false, 'Substring process must not match processData');
+    assert.strictEqual(matchSymbolInSnippet(codeSample, 'processData'), true, 'Exact symbol processData must match');
+
+    // Special character symbol: calc(Total)
+    const codeWithCall = 'const result = calc(Total) + 5;';
+    assert.strictEqual(matchSymbolInSnippet(codeWithCall, 'calc(Total)'), true, 'Literal calc(Total) must match');
+    assert.strictEqual(matchSymbolInSnippet(codeWithCall, 'calc(Total_ext)'), false, 'calc(Total_ext) must not match');
+
+    // Admission engine integration with special symbol
+    const testSnippetCode = 'class TestService {\n  foo.bar() { return 1; }\n}';
+    const testSnippetPath = path.join(testWorkspace, 'special_sym.js');
+    await fs.writeFile(testSnippetPath, testSnippetCode, 'utf8');
+    const testSnippetHash = crypto.createHash('sha256').update(testSnippetCode, 'utf8').digest('hex');
+    mockSnapshots['special_sym.js'] = { contentHash: testSnippetHash, indexedAt: Date.now() };
+
+    // Valid special symbol literal match
+    const validSpecialNode = [{
+      id: 'ev-sym-valid',
+      symbol: 'foo.bar',
+      filePath: 'special_sym.js',
+      startLine: 2,
+      endLine: 2,
+      isCoreTarget: true
+    }];
+    const validRes = await admissionEngine.evaluateAdmission(validSpecialNode, 'snap-001', 'FEATURE');
+    assert.strictEqual(validRes.admittedEvidence.length, 1);
+    assert.strictEqual(validRes.admittedEvidence[0].validationStatus, 'SOURCE_MATCHED');
+
+    // Injected wildcard symbol mismatch
+    const injectNode = [{
+      id: 'ev-sym-inject',
+      symbol: '.*',
+      filePath: 'special_sym.js',
+      startLine: 2,
+      endLine: 2,
+      isCoreTarget: true
+    }];
+    const injectRes = await admissionEngine.evaluateAdmission(injectNode, 'snap-001', 'FEATURE');
+    assert.strictEqual(injectRes.admittedEvidence.length, 0);
+    assert.strictEqual(injectRes.rejectedEvidence.length, 1);
+    assert.strictEqual(injectRes.rejectedEvidence[0].rejectionReason, 'MISMATCH');
+
+    // 3. Unicode identifier boundary verification (BLOCKER A2-R)
+    // Combining Mark cannot be mistaken for identifier boundary
+    assert.strictEqual(
+      matchSymbolInSnippet('const foo\u0301 = 1;', 'foo'),
+      false,
+      'Combining mark must not be mistaken for identifier boundary'
+    );
+
+    // Unicode Connector Punctuation cannot be mistaken for identifier boundary
+    assert.strictEqual(
+      matchSymbolInSnippet('const foo\u203Fbar = 1;', 'foo'),
+      false,
+      'Unicode Connector Punctuation must not be mistaken for identifier boundary'
+    );
+
+    // Chinese characters adjacent to symbol must be rejected
+    assert.strictEqual(matchSymbolInSnippet('const 變數foo變數 = 1;', 'foo'), false, '變數foo變數 must NOT match foo');
+    assert.strictEqual(matchSymbolInSnippet('const foo變數 = 1;', 'foo'), false, 'foo變數 must NOT match foo');
+    assert.strictEqual(matchSymbolInSnippet('const 變數foo = 1;', 'foo'), false, '變數foo must NOT match foo');
+
+    // Truly standalone symbols must pass
+    assert.strictEqual(matchSymbolInSnippet('const foo = 1;', 'foo'), true, 'Standalone foo must match foo');
+    assert.strictEqual(matchSymbolInSnippet('function foo() { return 42; }', 'foo'), true, 'foo function must match foo');
+
+    // Admission engine rejection of false Unicode boundary match
+    const unicodeSnippetPath = path.join(testWorkspace, 'unicode_test.js');
+    await fs.writeFile(unicodeSnippetPath, 'const 變數foo變數 = 100;\n', 'utf8');
+    const unicodeHash = crypto.createHash('sha256').update('const 變數foo變數 = 100;\n', 'utf8').digest('hex');
+    mockSnapshots['unicode_test.js'] = { contentHash: unicodeHash, indexedAt: Date.now() };
+
+    const unicodeFalseNode = [{
+      id: 'ev-unicode-false',
+      symbol: 'foo',
+      filePath: 'unicode_test.js',
+      startLine: 1,
+      endLine: 1,
+      isCoreTarget: true
+    }];
+    const unicodeRes = await admissionEngine.evaluateAdmission(unicodeFalseNode, 'snap-001', 'FEATURE');
+    assert.strictEqual(unicodeRes.admittedEvidence.length, 0);
+    assert.strictEqual(unicodeRes.rejectedEvidence.length, 1);
+    assert.strictEqual(unicodeRes.rejectedEvidence[0].rejectionReason, 'MISMATCH', 'Must reject foo when inside 變數foo變數');
+
+    pass('INV-SYM.1', 'Regex injection prevented, literal symbol escaping verified, and Unicode identifier boundaries strictly respected');
+  } catch (err) {
+    fail('INV-SYM.1', 'Regex injection prevention and symbol matching', err);
+  }
+
+  // INV-LINE.1: 行號嚴格純整數解析與非法格式攔截 (parseStrictInteger)
+  try {
+    const { parseStrictInteger } = require('../services/evidence_admission');
+
+    // Valid safe integers
+    assert.strictEqual(parseStrictInteger(1), 1);
+    assert.strictEqual(parseStrictInteger(42), 42);
+    assert.strictEqual(parseStrictInteger('2'), 2);
+    assert.strictEqual(parseStrictInteger('  100  '), 100);
+    assert.strictEqual(parseStrictInteger(Number.MAX_SAFE_INTEGER), 9007199254740991);
+
+    // Invalid non-integers or unsafe integers (rejected with null)
+    assert.strictEqual(parseStrictInteger(9007199254740992), null, 'Unsafe integer > MAX_SAFE_INTEGER must be null');
+    assert.strictEqual(parseStrictInteger('9007199254740992'), null, 'Unsafe integer string > MAX_SAFE_INTEGER must be null');
+    assert.strictEqual(parseStrictInteger('2.9'), null);
+    assert.strictEqual(parseStrictInteger(2.9), null);
+    assert.strictEqual(parseStrictInteger('2abc'), null);
+    assert.strictEqual(parseStrictInteger('abc'), null);
+    assert.strictEqual(parseStrictInteger(NaN), null);
+    assert.strictEqual(parseStrictInteger(Infinity), null);
+    assert.strictEqual(parseStrictInteger(null), null);
+    assert.strictEqual(parseStrictInteger(undefined), null);
+
+    // Admission engine line coordinate rejection
+    const invalidLineNodes = [
+      { id: 'ev-line-float', symbol: 'calculateTotal', filePath: 'service.js', startLine: '2.9', endLine: 4 },
+      { id: 'ev-line-mixed', symbol: 'calculateTotal', filePath: 'service.js', startLine: 2, endLine: '4abc' }
+    ];
+    const lineRes = await admissionEngine.evaluateAdmission(invalidLineNodes, 'snap-001', 'FEATURE');
+    assert.strictEqual(lineRes.admittedEvidence.length, 0);
+    assert.strictEqual(lineRes.rejectedEvidence.length, 2);
+    assert.strictEqual(lineRes.rejectedEvidence[0].rejectionReason, 'OUT_OF_BOUNDS');
+    assert.strictEqual(lineRes.rejectedEvidence[1].rejectionReason, 'OUT_OF_BOUNDS');
+
+    pass('INV-LINE.1', 'Strict integer line number enforcement: 2.9 and 2abc 100% rejected as OUT_OF_BOUNDS');
+  } catch (err) {
+    fail('INV-LINE.1', 'Strict integer line number validation', err);
+  }
+
+  // INV-POLICY.1: 五種 Task Policy Rank 全覆蓋表格驅動測試
+  try {
+    const { getTaskPolicyRank } = require('../services/context_compiler');
+
+    const testMatrix = [
+      // 1. SECURITY_AUDIT
+      { task: 'SECURITY_AUDIT', item: { validationStatus: 'SOURCE_MATCHED', isCoreTarget: false }, expected: 2 },
+      { task: 'SECURITY_AUDIT', item: { validationStatus: 'CONTENT_VERIFIED', isCoreTarget: true }, expected: 2 },
+      { task: 'SECURITY_AUDIT', item: { validationStatus: 'STALE', isCoreTarget: true }, expected: 1 },
+      { task: 'SECURITY_AUDIT', item: { validationStatus: 'UNVERIFIED', isCoreTarget: true }, expected: 1 },
+
+      // 2. REFACTOR
+      { task: 'REFACTOR', item: { validationStatus: 'SOURCE_MATCHED', isCoreTarget: false }, expected: 2 },
+      { task: 'REFACTOR', item: { validationStatus: 'CONTENT_VERIFIED', isCoreTarget: true }, expected: 2 },
+      { task: 'REFACTOR', item: { validationStatus: 'STALE', isCoreTarget: true }, expected: 1 },
+      { task: 'REFACTOR', item: { validationStatus: 'UNVERIFIED', isCoreTarget: true }, expected: 1 },
+
+      // 3. BUG_FIX
+      { task: 'BUG_FIX', item: { validationStatus: 'SOURCE_MATCHED', isCoreTarget: true }, expected: 3 },
+      { task: 'BUG_FIX', item: { validationStatus: 'CONTENT_VERIFIED', isCoreTarget: true }, expected: 3 },
+      { task: 'BUG_FIX', item: { validationStatus: 'SOURCE_MATCHED', isCoreTarget: false }, expected: 2 },
+      { task: 'BUG_FIX', item: { validationStatus: 'CONTENT_VERIFIED', isCoreTarget: false }, expected: 2 },
+      { task: 'BUG_FIX', item: { validationStatus: 'STALE', isCoreTarget: true }, expected: 1 },
+      { task: 'BUG_FIX', item: { validationStatus: 'UNVERIFIED', isCoreTarget: false }, expected: 1 },
+
+      // 4. FEATURE
+      { task: 'FEATURE', item: { validationStatus: 'SOURCE_MATCHED', isCoreTarget: false }, expected: 3 },
+      { task: 'FEATURE', item: { validationStatus: 'CONTENT_VERIFIED', isCoreTarget: false }, expected: 3 },
+      { task: 'FEATURE', item: { validationStatus: 'STALE', isCoreTarget: true }, expected: 2 },
+      { task: 'FEATURE', item: { validationStatus: 'UNVERIFIED', isCoreTarget: true }, expected: 1 },
+
+      // 5. DOCUMENTATION
+      { task: 'DOCUMENTATION', item: { validationStatus: 'SOURCE_MATCHED', isCoreTarget: true }, expected: 1 },
+      { task: 'DOCUMENTATION', item: { validationStatus: 'CONTENT_VERIFIED', isCoreTarget: true }, expected: 1 },
+      { task: 'DOCUMENTATION', item: { validationStatus: 'STALE', isCoreTarget: true }, expected: 1 },
+      { task: 'DOCUMENTATION', item: { validationStatus: 'UNVERIFIED', isCoreTarget: true }, expected: 1 }
+    ];
+
+    for (const testCase of testMatrix) {
+      const rank = getTaskPolicyRank(testCase.item, testCase.task);
+      assert.strictEqual(
+        rank,
+        testCase.expected,
+        `Task ${testCase.task} with status=${testCase.item.validationStatus}, core=${testCase.item.isCoreTarget} must have Policy Rank ${testCase.expected}, got ${rank}`
+      );
+    }
+
+    pass('INV-POLICY.1', 'Table-driven verification of all 5 Task Policy Ranks across all status/core combinations 100% PASS');
+  } catch (err) {
+    fail('INV-POLICY.1', 'Task policy rank table-driven test', err);
+  }
+
+  // INV-SCORE.1: Admission 階段非法 relevanceScore 嚴格拒絕門禁 (BLOCKER SORT-R)
+  try {
+    // 1. Direct evaluateAdmission rejection on NaN, Infinity, out-of-range, and string
+    const malformedScoreNodes = [
+      { id: 'ev-nan', symbol: 'calculateTotal', filePath: 'service.js', startLine: 2, endLine: 4, relevanceScore: NaN, isCoreTarget: true },
+      { id: 'ev-inf', symbol: 'calculateTotal', filePath: 'service.js', startLine: 2, endLine: 4, relevanceScore: Infinity, isCoreTarget: true },
+      { id: 'ev-neg', symbol: 'calculateTotal', filePath: 'service.js', startLine: 2, endLine: 4, relevanceScore: -0.1, isCoreTarget: true },
+      { id: 'ev-over', symbol: 'calculateTotal', filePath: 'service.js', startLine: 2, endLine: 4, relevanceScore: 1.1, isCoreTarget: true },
+      { id: 'ev-str', symbol: 'calculateTotal', filePath: 'service.js', startLine: 2, endLine: 4, relevanceScore: '0.8', isCoreTarget: true }
+    ];
+
+    const admRes = await admissionEngine.evaluateAdmission(malformedScoreNodes, 'snap-001', 'FEATURE');
+    assert.strictEqual(admRes.admittedEvidence.length, 0, 'No malformed relevanceScore nodes must be admitted');
+    assert.strictEqual(admRes.rejectedEvidence.length, 5, 'All 5 malformed relevanceScore nodes must be rejected');
+    for (const rej of admRes.rejectedEvidence) {
+      assert.strictEqual(rej.category, 'INVALID_RELEVANCE_SCORE');
+      assert.strictEqual(rej.rejectionReason, 'OUT_OF_BOUNDS');
+    }
+
+    // 2. End-to-end compile pipeline: ensure NaN is not converted to 1.0 or 0.5 and cannot bypass sorting preflight
+    const e2ePlan = {
+      nodes: [
+        { id: 'ev-nan-e2e', symbol: 'calculateTotal', filePath: 'service.js', startLine: 2, endLine: 4, relevanceScore: NaN, isCoreTarget: true },
+        { id: 'ev-valid-e2e', symbol: 'calculateTotal', filePath: 'service.js', startLine: 2, endLine: 4, relevanceScore: 0.9, isCoreTarget: true }
+      ]
+    };
+
+    const compRes = await compiler.compile(e2ePlan, { action: 'FEATURE' });
+    // The valid node enters sorting and publication; the NaN node is rejected at admission
+    assert.strictEqual(compRes.compiledItems.length, 1);
+    assert.strictEqual(compRes.compiledItems[0].sourceEvidenceId, 'ev-valid-e2e');
+    assert.strictEqual(compRes.compiledItems[0].relevanceScore, 0.9);
+    assert.strictEqual(compRes.rejectedItems.length, 1);
+    assert.strictEqual(compRes.rejectedItems[0].sourceEvidenceId, 'ev-nan-e2e');
+    assert.strictEqual(compRes.rejectedItems[0].category, 'INVALID_RELEVANCE_SCORE');
+
+    // 3. Verify omitted relevanceScore (undefined) deterministically receives default
+    const omittedNode = [{ id: 'ev-omitted', symbol: 'calculateTotal', filePath: 'service.js', startLine: 2, endLine: 4, isCoreTarget: true }];
+    const omittedRes = await admissionEngine.evaluateAdmission(omittedNode, 'snap-001', 'FEATURE');
+    assert.strictEqual(omittedRes.admittedEvidence.length, 1);
+    assert.strictEqual(omittedRes.admittedEvidence[0].relevanceScore, 1.0, 'Core target with omitted score receives default 1.0');
+
+    pass('INV-SCORE.1', 'Admission strictly rejects NaN/Infinity/out-of-range relevanceScore without silent fallback to defaults');
+  } catch (err) {
+    fail('INV-SCORE.1', 'Strict relevanceScore validation gate', err);
   }
 
   // Cleanup temporary test workspace
