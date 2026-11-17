@@ -102,6 +102,29 @@ class TaskManager {
         taskPayload.code_context = userInput.code_context;
       }
 
+      // P1-C4: 無角色模式下結構化 CodeGraph 與隔離參數透傳
+      if (Object.hasOwn(userInput, 'action') && typeof userInput.action === 'string') {
+        taskPayload.action = userInput.action;
+      }
+      if (Object.hasOwn(userInput, 'targetFiles') && Array.isArray(userInput.targetFiles)) {
+        taskPayload.targetFiles = userInput.targetFiles;
+      }
+      if (Object.hasOwn(userInput, 'targetSymbols') && Array.isArray(userInput.targetSymbols)) {
+        taskPayload.targetSymbols = userInput.targetSymbols;
+      }
+      if (Object.hasOwn(userInput, 'tenantId') && typeof userInput.tenantId === 'string') {
+        taskPayload.tenantId = userInput.tenantId;
+      }
+      if (Object.hasOwn(userInput, 'taskType') && typeof userInput.taskType === 'string') {
+        taskPayload.taskType = userInput.taskType;
+      }
+      if (Object.hasOwn(userInput, 'maxExecutionTokens') && Number.isSafeInteger(userInput.maxExecutionTokens) && userInput.maxExecutionTokens > 0) {
+        taskPayload.maxExecutionTokens = userInput.maxExecutionTokens;
+      }
+      if (Object.hasOwn(userInput, 'evidenceNodes') && Array.isArray(userInput.evidenceNodes)) {
+        taskPayload.evidenceNodes = userInput.evidenceNodes;
+      }
+
       outputSchema = userInput.schema || {
         type: "object",
         properties: {
@@ -154,6 +177,9 @@ class TaskManager {
     // 5. 生成密碼學安全 Task ID
     const taskId = `task_${crypto.randomUUID()}`;
     const createdAt = Date.now();
+    if (!Object.hasOwn(taskPayload, 'taskId')) {
+      taskPayload.taskId = taskId;
+    }
 
     const taskRecord = {
       taskId,

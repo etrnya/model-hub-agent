@@ -192,11 +192,66 @@ class RoleManager {
     const taskPayload = {
       objective: userInput.objective.trim(),
       constraints: mergedConstraints,
-      tags: mergedTags
+      tags: mergedTags,
+      roleId
     };
 
     if (Object.hasOwn(userInput, 'code_context') && typeof userInput.code_context === 'string') {
       taskPayload.code_context = userInput.code_context;
+    }
+
+    // P1-C4: 結構化 CodeGraph 與隔離邊界參數驗證與透傳
+    const VALID_ACTIONS = ['BUG_FIX', 'REFACTOR', 'SECURITY_AUDIT', 'DOCUMENTATION', 'FEATURE'];
+    if (Object.hasOwn(userInput, 'action')) {
+      if (typeof userInput.action !== 'string' || !VALID_ACTIONS.includes(userInput.action)) {
+        throw new Error(`INVALID_PARAMETER: Invalid action "${userInput.action}". Supported: ${VALID_ACTIONS.join(', ')}`);
+      }
+      taskPayload.action = userInput.action;
+    }
+
+    if (Object.hasOwn(userInput, 'targetFiles')) {
+      if (!Array.isArray(userInput.targetFiles) || !userInput.targetFiles.every(f => typeof f === 'string' && f.trim().length > 0)) {
+        throw new Error('INVALID_PARAMETER: "targetFiles" must be an array of non-empty strings.');
+      }
+      taskPayload.targetFiles = userInput.targetFiles.map(f => f.trim());
+    }
+
+    if (Object.hasOwn(userInput, 'targetSymbols')) {
+      if (
+        !Array.isArray(userInput.targetSymbols) ||
+        !userInput.targetSymbols.every(s => (typeof s === 'string' && s.trim().length > 0) || (s && typeof s === 'object' && !Array.isArray(s)))
+      ) {
+        throw new Error('INVALID_PARAMETER: "targetSymbols" must be an array of non-empty strings or symbol objects.');
+      }
+      taskPayload.targetSymbols = userInput.targetSymbols.map(s => (typeof s === 'string' ? s.trim() : s));
+    }
+
+    if (Object.hasOwn(userInput, 'tenantId')) {
+      if (typeof userInput.tenantId !== 'string' || !userInput.tenantId.trim()) {
+        throw new Error('INVALID_PARAMETER: "tenantId" must be a non-empty string.');
+      }
+      taskPayload.tenantId = userInput.tenantId.trim();
+    }
+
+    if (Object.hasOwn(userInput, 'taskType')) {
+      if (typeof userInput.taskType !== 'string' || !userInput.taskType.trim()) {
+        throw new Error('INVALID_PARAMETER: "taskType" must be a non-empty string.');
+      }
+      taskPayload.taskType = userInput.taskType.trim();
+    }
+
+    if (Object.hasOwn(userInput, 'maxExecutionTokens')) {
+      if (!Number.isSafeInteger(userInput.maxExecutionTokens) || userInput.maxExecutionTokens <= 0) {
+        throw new Error('INVALID_PARAMETER: "maxExecutionTokens" must be a positive safe integer.');
+      }
+      taskPayload.maxExecutionTokens = userInput.maxExecutionTokens;
+    }
+
+    if (Object.hasOwn(userInput, 'evidenceNodes')) {
+      if (!Array.isArray(userInput.evidenceNodes) || !userInput.evidenceNodes.every(n => n && typeof n === 'object' && !Array.isArray(n))) {
+        throw new Error('INVALID_PARAMETER: "evidenceNodes" must be an array of plain objects.');
+      }
+      taskPayload.evidenceNodes = userInput.evidenceNodes;
     }
 
     // 完全參照隔離輸出

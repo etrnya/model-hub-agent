@@ -5,6 +5,7 @@ const GeminiClient = require('../infrastructure/clients/gemini_client');
 const DeepSeekClient = require('../infrastructure/clients/deepseek_client');
 const VertexAIClient = require('../infrastructure/clients/vertex_ai_client');
 const CodeGraphAdapter = require('../infrastructure/adapters/codegraph_adapter');
+const CallGraphEngine = require('./call_graph_engine');
 const verificationGate = require('./verification_gate');
 const { RoleAwareContextPlanner } = require('./context_planner');
 const { EvidenceAdmissionEngine } = require('./evidence_admission');
@@ -14,7 +15,27 @@ const guardrail = require('./guardrail_manager');
 const codegraph = new CodeGraphAdapter();
 
 /**
- * Compiles verified CodeGraph context via RoleAwareContextPlanner -> EvidenceAdmissionEngine -> ContextCompiler.
+ * Extracts roleId from context.roleId, options.roleId, or a "role:<id>" tag.
+ */
+function resolveEffectiveRoleId(context, options = {}) {
+  if (context && typeof context.roleId === 'string' && context.roleId.trim()) {
+    return context.roleId.trim();
+  }
+  if (options && typeof options.roleId === 'string' && options.roleId.trim()) {
+    return options.roleId.trim();
+  }
+  if (context && Array.isArray(context.tags)) {
+    for (const tag of context.tags) {
+      if (typeof tag === 'string' && tag.startsWith('role:') && tag.length > 5) {
+        return tag.slice(5).trim();
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Compiles verified CodeGraph context via RoleAwareContextPlanner -> CallGraphEngine -> EvidenceAdmissionEngine -> ContextCompiler.
  * Returns null when the task provides no structured CodeGraph targets, avoiding crashes on general queries.
  */
 async function compileCodeGraphContext(context, options = {}) {
@@ -29,20 +50,40 @@ async function compileCodeGraphContext(context, options = {}) {
     return null;
   }
 
+  const effectiveRoleId = resolveEffectiveRoleId(context, options);
   let retrievalPlan = context.retrievalPlan;
   if (!retrievalPlan) {
     const planner = new RoleAwareContextPlanner();
-    retrievalPlan = await planner.plan(context.roleId || options.roleId || null, {
+    const baseSymbols = Array.isArray(context.targetSymbols) ? [...context.targetSymbols] : [];
+    if (Array.isArray(options.extraTargetSymbols)) {
+      for (const extraSym of options.extraTargetSymbols) {
+        if (typeof extraSym === 'string' && extraSym.trim() && !baseSymbols.includes(extraSym.trim())) {
+          baseSymbols.push(extraSym.trim());
+        }
+      }
+    }
+    retrievalPlan = await planner.plan(effectiveRoleId, {
       taskId: context.taskId || options.taskId || `task-${Date.now()}`,
       objective: context.objective || 'CodeGraph context retrieval',
       action: context.action || 'FEATURE',
       targetFiles: context.targetFiles || [],
-      targetSymbols: context.targetSymbols || [],
+      targetSymbols: baseSymbols,
       maxExecutionTokens: context.maxExecutionTokens
     });
   }
 
-  // Ensure nodes carry a valid filePath when caller supplies targetFiles + string targetSymbols
+  if (Number.isInteger(options.traversalDepthOverride) && options.traversalDepthOverride >= 1) {
+    const clampedDepth = Math.min(3, Math.max(1, options.traversalDepthOverride));
+    retrievalPlan = {
+      ...retrievalPlan,
+      traversalDepth: Math.max(retrievalPlan.traversalDepth || 1, clampedDepth)
+    };
+  }
+
+  const activeAdapter = options.codeGraphAdapter || codegraph;
+  let blastRadiusReports = [];
+
+  // Populate candidate nodes via CallGraphEngine topology traversal or deterministic fallback
   if (!Array.isArray(retrievalPlan.nodes) || retrievalPlan.nodes.length === 0) {
     if (Array.isArray(context.evidenceNodes) && context.evidenceNodes.length > 0) {
       retrievalPlan = { ...retrievalPlan, nodes: context.evidenceNodes };
@@ -51,22 +92,94 @@ async function compileCodeGraphContext(context, options = {}) {
       Array.isArray(retrievalPlan.targetSymbols) && retrievalPlan.targetSymbols.length > 0
     ) {
       const defaultFile = retrievalPlan.targetFiles[0];
-      retrievalPlan = {
-        ...retrievalPlan,
-        nodes: retrievalPlan.targetSymbols.map((sym, idx) => ({
-          id: `ev-${String(idx + 1).padStart(2, '0')}`,
-          symbol: typeof sym === 'string' ? sym : (sym.symbol || sym.name),
-          filePath: (typeof sym === 'object' && sym.filePath) ? sym.filePath : defaultFile,
-          startLine: (typeof sym === 'object' && sym.startLine) ? sym.startLine : 1,
-          endLine: (typeof sym === 'object' && sym.endLine) ? sym.endLine : 60,
-          isCoreTarget: (typeof sym === 'object' && sym.isCoreTarget !== undefined) ? sym.isCoreTarget : (idx === 0),
-          relevanceScore: (typeof sym === 'object' && sym.relevanceScore !== undefined) ? sym.relevanceScore : (idx === 0 ? 1.0 : 0.6)
-        }))
-      };
+      const discoveredNodes = [];
+      const seenNodeKeys = new Set();
+
+      const canTraverseGraph = (
+        options.expandCallGraph !== false &&
+        activeAdapter &&
+        typeof activeAdapter.validateSymbol === 'function' &&
+        typeof activeAdapter.querySymbols === 'function' &&
+        (typeof activeAdapter.findCallers === 'function' || typeof activeAdapter.findCallees === 'function')
+      );
+
+      if (canTraverseGraph) {
+        try {
+          const graphEngine = new CallGraphEngine(activeAdapter, {
+            projectPath: options.workspaceRoot || activeAdapter.projectPath || process.cwd()
+          });
+          const maxDepth = retrievalPlan.traversalDepth || 1;
+          const direction = retrievalPlan.traversalDirection || 'bidirectional';
+
+          for (let symIdx = 0; symIdx < retrievalPlan.targetSymbols.length; symIdx++) {
+            const rawSym = retrievalPlan.targetSymbols[symIdx];
+            const symName = typeof rawSym === 'string' ? rawSym : (rawSym.symbol || rawSym.name);
+            if (!symName) continue;
+
+            const graph = await graphEngine.buildCallGraph(symName, {
+              direction,
+              maxDepth,
+              filePath: defaultFile
+            });
+
+            if (typeof activeAdapter.analyzeImpact === 'function') {
+              try {
+                const br = await graphEngine.assessBlastRadius(symName, { depth: maxDepth });
+                blastRadiusReports.push(br);
+              } catch (_) {
+                // Non-fatal if impact CLI is unavailable
+              }
+            }
+
+            for (const gNode of (graph.nodes || [])) {
+              const resolvedFile = (gNode.filePath && gNode.filePath !== 'UNKNOWN')
+                ? gNode.filePath
+                : (gNode.isRoot ? defaultFile : null);
+              if (!resolvedFile) continue;
+
+              const dedupKey = `${resolvedFile}::${gNode.name}`;
+              if (seenNodeKeys.has(dedupKey)) continue;
+              seenNodeKeys.add(dedupKey);
+
+              const isCore = Boolean(gNode.isRoot && symIdx === 0);
+              const depthVal = typeof gNode.depth === 'number' ? gNode.depth : 1;
+              const relScore = isCore ? 1.0 : Number((1 / (depthVal + 1)).toFixed(2));
+
+              discoveredNodes.push({
+                id: `ev-${String(discoveredNodes.length + 1).padStart(2, '0')}`,
+                symbol: gNode.name,
+                filePath: resolvedFile,
+                startLine: gNode.startLine || 1,
+                endLine: Math.max(gNode.startLine || 1, gNode.endLine || 60),
+                isCoreTarget: isCore,
+                relevanceScore: relScore
+              });
+            }
+          }
+        } catch (_) {
+          // Fallback to direct target mapping below if graph engine fails
+        }
+      }
+
+      if (discoveredNodes.length > 0) {
+        retrievalPlan = { ...retrievalPlan, nodes: discoveredNodes };
+      } else {
+        retrievalPlan = {
+          ...retrievalPlan,
+          nodes: retrievalPlan.targetSymbols.map((sym, idx) => ({
+            id: `ev-${String(idx + 1).padStart(2, '0')}`,
+            symbol: typeof sym === 'string' ? sym : (sym.symbol || sym.name),
+            filePath: (typeof sym === 'object' && sym.filePath) ? sym.filePath : defaultFile,
+            startLine: (typeof sym === 'object' && sym.startLine) ? sym.startLine : 1,
+            endLine: (typeof sym === 'object' && sym.endLine) ? sym.endLine : 60,
+            isCoreTarget: (typeof sym === 'object' && sym.isCoreTarget !== undefined) ? sym.isCoreTarget : (idx === 0),
+            relevanceScore: (typeof sym === 'object' && sym.relevanceScore !== undefined) ? sym.relevanceScore : (idx === 0 ? 1.0 : 0.6)
+          }))
+        };
+      }
     }
   }
 
-  const activeAdapter = options.codeGraphAdapter || codegraph;
   const admissionEngine = new EvidenceAdmissionEngine({
     codeGraphAdapter: activeAdapter,
     workspaceRoot: options.workspaceRoot || process.cwd()
@@ -96,7 +209,11 @@ async function compileCodeGraphContext(context, options = {}) {
       metadata: {
         decision: isoResult.decision,
         admissionReceipt: isoResult.admissionReceipt,
-        provenanceToken: isoResult.provenanceToken
+        provenanceToken: isoResult.provenanceToken,
+        roleId: retrievalPlan.roleId,
+        policyName: retrievalPlan.policyName,
+        traversalDepth: retrievalPlan.traversalDepth,
+        blastRadius: blastRadiusReports.length > 0 ? blastRadiusReports : undefined
       }
     };
   }
@@ -105,7 +222,13 @@ async function compileCodeGraphContext(context, options = {}) {
   const compResult = await compiler.compile(retrievalPlan, { action });
   return {
     contextText: compResult.contextText || '',
-    metadata: compResult.metadata || {}
+    metadata: {
+      ...(compResult.metadata || {}),
+      roleId: retrievalPlan.roleId,
+      policyName: retrievalPlan.policyName,
+      traversalDepth: retrievalPlan.traversalDepth,
+      blastRadius: blastRadiusReports.length > 0 ? blastRadiusReports : undefined
+    }
   };
 }
 
@@ -572,18 +695,54 @@ class CascadingExecutor {
           let correctionSuccess = false;
           let lastResult = result;
           let lastReason = verification.reason;
+          let lastMissingSymbols = Array.isArray(verification.missingSymbols) ? verification.missingSymbols : [];
 
           while (correctionAttempts < maxCorrectionAttempts && !correctionSuccess) {
             correctionAttempts++;
             console.log(`🔄 [CascadingExecutor] Self-Correction Attempt ${correctionAttempts}/${maxCorrectionAttempts}...`);
 
+            // Phase 1-C4 Phase 2: Dynamic Context Depth Expansion (depth=3) on Verification Failure
+            let expandedContextDepth = null;
+            const hasStructuredTargets = Boolean(
+              context &&
+              (context.retrievalPlan ||
+               (Array.isArray(context.targetFiles) && context.targetFiles.length > 0) ||
+               (Array.isArray(context.targetSymbols) && context.targetSymbols.length > 0))
+            );
+            if (hasStructuredTargets && options.enableDynamicContextExpansion !== false) {
+              try {
+                const expandedDepth = Math.min(3, 2 + correctionAttempts); // Attempt 1 -> depth=3
+                const expandedCtx = await compileCodeGraphContext(context, {
+                  ...options,
+                  traversalDepthOverride: expandedDepth,
+                  extraTargetSymbols: lastMissingSymbols
+                });
+                if (expandedCtx && expandedCtx.contextText) {
+                  processedContext.code_context = expandedCtx.contextText;
+                  context.code_context = expandedCtx.contextText;
+                  context.compiledContextMeta = expandedCtx.metadata;
+                  expandedContextDepth = expandedCtx.metadata && expandedCtx.metadata.traversalDepth
+                    ? expandedCtx.metadata.traversalDepth
+                    : expandedDepth;
+                  console.log(`🕸️  [CascadingExecutor] Dynamic Self-Correction Context Expanded (depth=${expandedContextDepth}, ${expandedCtx.contextText.length} chars).`);
+                }
+              } catch (expandErr) {
+                console.warn(`⚠️  [CascadingExecutor] Dynamic context expansion skipped: ${expandErr.message}`);
+              }
+            }
+
+            const correctionFeedback = {
+              previous_failed_output: lastResult,
+              validation_error: lastReason,
+              instruction: "Your previous output violated the constraints. Please carefully review the validation_error and correct the JSON output. Do NOT repeat the violation."
+            };
+            if (expandedContextDepth !== null) {
+              correctionFeedback.expanded_context_depth = expandedContextDepth;
+            }
+
             const correctionPayload = {
               ...processedContext,
-              _correction_feedback: {
-                previous_failed_output: lastResult,
-                validation_error: lastReason,
-                instruction: "Your previous output violated the constraints. Please carefully review the validation_error and correct the JSON output. Do NOT repeat the violation."
-              }
+              _correction_feedback: correctionFeedback
             };
 
             try {

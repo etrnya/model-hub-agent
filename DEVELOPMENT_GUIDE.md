@@ -26,6 +26,11 @@
 4. **隔離邊界與 90 格降級矩陣 (P1-C3.3)**：
    * `services/isolation_boundary.js`（純 JS 隔離層：13 欄位 TLV 租戶隔離、`AdmissionReceipt`、`SourceProvenanceToken`、`decidePublication()` 90 格權威政策矩陣與 Fail-Closed 阻斷）
    * 註：未編譯之 C++ Native 沙盒與 `ProcessLifecycleManager` 目前暫緩於 `forensics/` 備份，未納入主線。
+5. **任務感知動態檢索與二階段自癒閉環 (P1-C4)**：
+   * `services/role_manager.js` 與 `services/task_manager.js`：驗證並透傳 `roleId`、`taskId`、`action`、`targetFiles`、`targetSymbols`、`tenantId`、`taskType` 與 `maxExecutionTokens` 至 `taskPayload`。
+   * `services/cascading_executor.js`：
+     * **Phase 1 (PRE_DISPATCH)**：`compileCodeGraphContext()` 自動識別角色與任務策略，透過 `CallGraphEngine` 執行雙向拓撲遍歷 (`buildCallGraph`) 與衝擊範圍評估 (`assessBlastRadius`)，並經 `EvidenceAdmissionEngine` 與 `ContextCompiler` 封裝注入。
+     * **Phase 2 (SELF_CORRECTION)**：當 `VerificationGate` 判定內容驗證失敗 (`VERIFICATION_CONTENT_FAIL`) 時，自動將 CodeGraph 遍歷深度動態擴展至 `depth=3` 重新編譯上下文並寫入 `_correction_feedback.expanded_context_depth`，支援多跳呼叫邊界自癒。
 
 ---
 
@@ -68,3 +73,4 @@
 * `v1.3.0-phase-3`（`ed1e7bb`, 2026-06-29）：早期經典版（已同步於 GitHub `origin/main`）。
 * `v1.4.0-phase-1-consolidated`（`e88276f`, 2026-11-04）：P0-B / P1-A / P1-B 整合版。
 * 本機 `main` 目前已整合 P1-C1 ～ P1-C4（待用戶明確指示後方可 `git push`）。
+
