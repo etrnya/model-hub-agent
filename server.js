@@ -8,6 +8,7 @@ const memoryManager = require('./infrastructure/adapters/memory_manager');
 const benchmarkRunner = require('./tests/benchmark_runner');
 const roleManager = require('./services/role_manager');
 const taskManager = require('./services/task_manager');
+const cascadingExecutor = require('./services/cascading_executor');
 
 const PORT = process.env.AGENT_OS_PORT || 3000;
 
@@ -232,7 +233,15 @@ const server = http.createServer(async (req, res) => {
       tokensSummary: tokenMonitor.getSummary(),
       tokensHistory: tokenMonitor.history,
       driftStats,
-      memoryCache
+      memoryCache,
+      codeGraphTelemetry: typeof cascadingExecutor.getCodeGraphTelemetry === 'function'
+        ? cascadingExecutor.getCodeGraphTelemetry()
+        : null,
+      tasksSummary: {
+        activeCount: taskManager.activeCount,
+        queuedCount: taskManager.queue.length,
+        totalStored: taskManager.tasks.size
+      }
     }));
     return;
   }
@@ -287,7 +296,10 @@ const server = http.createServer(async (req, res) => {
     req.on('end', () => {
       try {
         const payload = JSON.parse(body);
-        const result = taskManager.submitTask(payload);
+        const idempotencyKey = req.headers && req.headers['x-idempotency-key'] !== undefined
+          ? req.headers['x-idempotency-key']
+          : undefined;
+        const result = taskManager.submitTask(payload, { idempotencyKey });
         res.writeHead(202, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ success: true, ...result }));
       } catch (err) {

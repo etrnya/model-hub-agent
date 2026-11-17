@@ -14,6 +14,81 @@ const { TokenBudgetGuard } = require('./token_budget_guard');
 const guardrail = require('./guardrail_manager');
 const codegraph = new CodeGraphAdapter();
 
+const MAX_TELEMETRY_HISTORY = 50;
+const MAX_TASK_TELEMETRY_MAP = 100;
+const codeGraphTelemetryState = {
+  totalCompilations: 0,
+  totalCompiledTokens: 0,
+  totalAdmittedItems: 0,
+  totalRejectedItems: 0,
+  totalDlpRedacted: 0,
+  selfCorrectionExpansions: 0,
+  isolatedPublications: 0,
+  history: [],
+  byTaskId: new Map()
+};
+
+function recordCodeGraphTelemetry(taskId, entry) {
+  codeGraphTelemetryState.totalCompilations++;
+  codeGraphTelemetryState.totalCompiledTokens += (entry.measuredTokens || 0);
+  codeGraphTelemetryState.totalAdmittedItems += (entry.totalItems || 0);
+  codeGraphTelemetryState.totalRejectedItems += (entry.rejectedCount || 0);
+  codeGraphTelemetryState.totalDlpRedacted += (entry.dlpRedactedCount || 0);
+  if (entry.isSelfCorrectionExpansion) {
+    codeGraphTelemetryState.selfCorrectionExpansions++;
+  }
+  if (entry.isolated) {
+    codeGraphTelemetryState.isolatedPublications++;
+  }
+
+  codeGraphTelemetryState.history.unshift(entry);
+  if (codeGraphTelemetryState.history.length > MAX_TELEMETRY_HISTORY) {
+    codeGraphTelemetryState.history.pop();
+  }
+
+  if (taskId && typeof taskId === 'string') {
+    if (codeGraphTelemetryState.byTaskId.size >= MAX_TASK_TELEMETRY_MAP && !codeGraphTelemetryState.byTaskId.has(taskId)) {
+      const oldestKey = codeGraphTelemetryState.byTaskId.keys().next().value;
+      if (oldestKey !== undefined) {
+        codeGraphTelemetryState.byTaskId.delete(oldestKey);
+      }
+    }
+    codeGraphTelemetryState.byTaskId.set(taskId, entry);
+  }
+}
+
+function getCodeGraphTelemetry() {
+  return {
+    summary: {
+      totalCompilations: codeGraphTelemetryState.totalCompilations,
+      totalCompiledTokens: codeGraphTelemetryState.totalCompiledTokens,
+      totalAdmittedItems: codeGraphTelemetryState.totalAdmittedItems,
+      totalRejectedItems: codeGraphTelemetryState.totalRejectedItems,
+      totalDlpRedacted: codeGraphTelemetryState.totalDlpRedacted,
+      selfCorrectionExpansions: codeGraphTelemetryState.selfCorrectionExpansions,
+      isolatedPublications: codeGraphTelemetryState.isolatedPublications
+    },
+    recentCompilations: codeGraphTelemetryState.history.slice(0, 15)
+  };
+}
+
+function getTaskTelemetry(taskId) {
+  if (!taskId || typeof taskId !== 'string') return null;
+  return codeGraphTelemetryState.byTaskId.get(taskId) || null;
+}
+
+function resetCodeGraphTelemetry() {
+  codeGraphTelemetryState.totalCompilations = 0;
+  codeGraphTelemetryState.totalCompiledTokens = 0;
+  codeGraphTelemetryState.totalAdmittedItems = 0;
+  codeGraphTelemetryState.totalRejectedItems = 0;
+  codeGraphTelemetryState.totalDlpRedacted = 0;
+  codeGraphTelemetryState.selfCorrectionExpansions = 0;
+  codeGraphTelemetryState.isolatedPublications = 0;
+  codeGraphTelemetryState.history = [];
+  codeGraphTelemetryState.byTaskId.clear();
+}
+
 /**
  * Extracts roleId from context.roleId, options.roleId, or a "role:<id>" tag.
  */
@@ -191,11 +266,14 @@ async function compileCodeGraphContext(context, options = {}) {
     codeGraphAdapter: activeAdapter
   });
 
+  const effectiveTaskId = context.taskId || options.taskId || `task-${Date.now()}`;
+  const isExpansion = Number.isInteger(options.traversalDepthOverride) && options.traversalDepthOverride > 1;
+
   if (options.isolatedEnvelope || context.tenantId) {
     const isoResult = await compiler.compileIsolatedEnvelope(
       retrievalPlan,
       {
-        taskId: context.taskId || options.taskId || `task-${Date.now()}`,
+        taskId: effectiveTaskId,
         tenantId: context.tenantId || options.tenantId || 'default-tenant',
         taskType: context.taskType || 'FEATURE_DEV'
       },
@@ -204,31 +282,66 @@ async function compileCodeGraphContext(context, options = {}) {
     if (isoResult.decision && (isoResult.decision.action === 'ABORT' || isoResult.decision.action === 'BLOCK')) {
       throw new Error(`[ContextIsolation] Publication blocked (${isoResult.decision.action}): ${isoResult.decision.reason || 'Policy violation'}`);
     }
+    const isoCtxText = (isoResult.envelope && isoResult.envelope.contextText) || '';
+    const isoMetadata = {
+      decision: isoResult.decision,
+      admissionReceipt: isoResult.admissionReceipt,
+      provenanceToken: isoResult.provenanceToken,
+      roleId: retrievalPlan.roleId,
+      policyName: retrievalPlan.policyName,
+      traversalDepth: retrievalPlan.traversalDepth,
+      blastRadius: blastRadiusReports.length > 0 ? blastRadiusReports : undefined
+    };
+    recordCodeGraphTelemetry(effectiveTaskId, {
+      taskId: effectiveTaskId,
+      timestamp: new Date().toISOString(),
+      roleId: retrievalPlan.roleId || 'default',
+      policyName: retrievalPlan.policyName || 'BALANCED_DEFAULT',
+      traversalDepth: retrievalPlan.traversalDepth || 1,
+      measuredTokens: (isoResult.envelope && isoResult.envelope.measuredTokens) || Math.ceil(isoCtxText.length / 4),
+      totalItems: (isoResult.envelope && Array.isArray(isoResult.envelope.compiledItems)) ? isoResult.envelope.compiledItems.length : 1,
+      rejectedCount: (isoResult.envelope && Array.isArray(isoResult.envelope.rejectedItems)) ? isoResult.envelope.rejectedItems.length : 0,
+      dlpRedactedCount: (isoResult.envelope && isoResult.envelope.metadata && isoResult.envelope.metadata.dlpRedactedCount) || 0,
+      snapshotId: (isoResult.admissionReceipt && isoResult.admissionReceipt.indexSnapshotId) || 'isolated-snap',
+      isolated: true,
+      decisionAction: isoResult.decision ? isoResult.decision.action : 'ALLOW',
+      blastRadiusLevel: blastRadiusReports[0] ? blastRadiusReports[0].assessedBlastRadius : null,
+      isSelfCorrectionExpansion: isExpansion
+    });
     return {
-      contextText: (isoResult.envelope && isoResult.envelope.contextText) || '',
-      metadata: {
-        decision: isoResult.decision,
-        admissionReceipt: isoResult.admissionReceipt,
-        provenanceToken: isoResult.provenanceToken,
-        roleId: retrievalPlan.roleId,
-        policyName: retrievalPlan.policyName,
-        traversalDepth: retrievalPlan.traversalDepth,
-        blastRadius: blastRadiusReports.length > 0 ? blastRadiusReports : undefined
-      }
+      contextText: isoCtxText,
+      metadata: isoMetadata
     };
   }
 
   const action = context.action || retrievalPlan.taskCategory || (retrievalPlan.taskPolicy && retrievalPlan.taskPolicy.taskAction) || 'FEATURE';
   const compResult = await compiler.compile(retrievalPlan, { action });
+  const stdMetadata = {
+    ...(compResult.metadata || {}),
+    roleId: retrievalPlan.roleId,
+    policyName: retrievalPlan.policyName,
+    traversalDepth: retrievalPlan.traversalDepth,
+    blastRadius: blastRadiusReports.length > 0 ? blastRadiusReports : undefined
+  };
+  recordCodeGraphTelemetry(effectiveTaskId, {
+    taskId: effectiveTaskId,
+    timestamp: new Date().toISOString(),
+    roleId: retrievalPlan.roleId || 'default',
+    policyName: retrievalPlan.policyName || 'BALANCED_DEFAULT',
+    traversalDepth: retrievalPlan.traversalDepth || 1,
+    measuredTokens: compResult.measuredTokens || (stdMetadata.tokenAudit && stdMetadata.tokenAudit.measuredTokens) || 0,
+    totalItems: stdMetadata.totalItems || (Array.isArray(compResult.compiledItems) ? compResult.compiledItems.length : 0),
+    rejectedCount: stdMetadata.rejectedCount || 0,
+    dlpRedactedCount: stdMetadata.dlpRedactedCount || 0,
+    snapshotId: stdMetadata.snapshotId || 'unknown',
+    isolated: false,
+    decisionAction: 'ALLOW',
+    blastRadiusLevel: blastRadiusReports[0] ? blastRadiusReports[0].assessedBlastRadius : null,
+    isSelfCorrectionExpansion: isExpansion
+  });
   return {
     contextText: compResult.contextText || '',
-    metadata: {
-      ...(compResult.metadata || {}),
-      roleId: retrievalPlan.roleId,
-      policyName: retrievalPlan.policyName,
-      traversalDepth: retrievalPlan.traversalDepth,
-      blastRadius: blastRadiusReports.length > 0 ? blastRadiusReports : undefined
-    }
+    metadata: stdMetadata
   };
 }
 
@@ -962,4 +1075,7 @@ class CascadingExecutor {
 
 const executorInstance = new CascadingExecutor();
 executorInstance.compileCodeGraphContext = compileCodeGraphContext;
+executorInstance.getCodeGraphTelemetry = getCodeGraphTelemetry;
+executorInstance.getTaskTelemetry = getTaskTelemetry;
+executorInstance.resetCodeGraphTelemetry = resetCodeGraphTelemetry;
 module.exports = executorInstance;

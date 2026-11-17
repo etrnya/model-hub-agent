@@ -175,6 +175,21 @@
               </select>
             </div>
           </div>
+
+          <div class="grid grid-cols-3 gap-3">
+            <div class="flex flex-col gap-1">
+              <label class="text-xs font-bold text-gray-400">🕸️ 目標檔案 (選填, 逗號分隔)</label>
+              <input type="text" id="task-target-files" class="glass-input px-3 py-2 text-xs" placeholder="services/router.js" />
+            </div>
+            <div class="flex flex-col gap-1">
+              <label class="text-xs font-bold text-gray-400">🔍 目標符號 (選填, 逗號分隔)</label>
+              <input type="text" id="task-target-symbols" class="glass-input px-3 py-2 text-xs" placeholder="getCandidates" />
+            </div>
+            <div class="flex flex-col gap-1">
+              <label class="text-xs font-bold text-gray-400">🔑 冪等鍵 (x-idempotency-key)</label>
+              <input type="text" id="task-idempotency-key" class="glass-input px-3 py-2 text-xs font-mono" placeholder="選填防重 Key" />
+            </div>
+          </div>
           
           <div class="flex justify-end gap-2 pt-2">
             <button onclick="submitAsyncTask()" id="async-btn" class="px-4 py-2 bg-purple-600 text-white rounded-xl hover:bg-purple-500 font-bold text-xs shadow-lg shadow-purple-950 transition-all flex items-center gap-1.5">
@@ -386,7 +401,12 @@
         sessionCost += costVal;
       });
       document.getElementById('saved-tokens-text').innerText = totalSaved.toLocaleString();
-      document.getElementById('saved-tokens-desc').innerText = `已成功抵禦 ${totalSaved.toLocaleString()} 額外 Tokens`;
+      const cgSummary = data.codeGraphTelemetry && data.codeGraphTelemetry.summary;
+      if (cgSummary && cgSummary.totalCompilations > 0) {
+        document.getElementById('saved-tokens-desc').innerText = `已抵禦 ${totalSaved.toLocaleString()} Tokens | CodeGraph 編譯 ${cgSummary.totalCompilations} 次 (自癒擴展 ${cgSummary.selfCorrectionExpansions} 次)`;
+      } else {
+        document.getElementById('saved-tokens-desc').innerText = `已成功抵禦 ${totalSaved.toLocaleString()} 額外 Tokens`;
+      }
 
       // Cost render
       document.getElementById('session-cost-text').innerText = `$${sessionCost.toFixed(6)} USD`;
@@ -602,21 +622,37 @@
 
       asyncBtn.disabled = true;
       try {
+        const targetFilesInput = document.getElementById('task-target-files');
+        const targetSymbolsInput = document.getElementById('task-target-symbols');
+        const idempotencyInput = document.getElementById('task-idempotency-key');
+
+        const targetFiles = targetFilesInput ? targetFilesInput.value.split(',').map(s => s.trim()).filter(Boolean) : [];
+        const targetSymbols = targetSymbolsInput ? targetSymbolsInput.value.split(',').map(s => s.trim()).filter(Boolean) : [];
+        const idempotencyKey = idempotencyInput ? idempotencyInput.value.trim() : '';
+
         const payload = {
           objective,
           constraints,
           tier: selectMode === 'race' ? 'high' : selectMode
         };
+        if (targetFiles.length > 0) payload.targetFiles = targetFiles;
+        if (targetSymbols.length > 0) payload.targetSymbols = targetSymbols;
+
+        const headers = { 'Content-Type': 'application/json' };
+        if (idempotencyKey) {
+          headers['x-idempotency-key'] = idempotencyKey;
+        }
 
         const res = await fetch('/api/tasks', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers,
           body: JSON.stringify(payload)
         });
 
         const data = await res.json();
         if (res.status === 202) {
-          resultBlock.textContent = `⚡ [HTTP 202 ACCEPTED] 任務已成功排入背景隊列！\nTask ID: ${data.taskId}\n狀態: ${data.status}\n` + resultBlock.textContent;
+          const dedupNote = data.deduplicated ? ' (🔑 冪等命中既有任務)' : '';
+          resultBlock.textContent = `⚡ [HTTP 202 ACCEPTED] 任務已成功排入背景隊列${dedupNote}！\nTask ID: ${data.taskId}\n狀態: ${data.status}\n` + resultBlock.textContent;
           fetchTaskList();
         } else {
           resultBlock.textContent = `❌ [HTTP ${res.status}] 提交失敗: ${data.error || 'Unknown error'}\n` + resultBlock.textContent;
@@ -693,7 +729,12 @@
         const res = await fetch(`/api/tasks/${encodeURIComponent(taskId)}`);
         if (!res.ok) return;
         const task = await res.json();
+        const cgLine = task.contextMeta
+          ? `\n🕸️ [CodeGraph 編譯指標]: Policy=${task.contextMeta.policyName} | Depth=${task.contextMeta.traversalDepth} | Tokens=${task.contextMeta.measuredTokens} | Snapshot=${task.contextMeta.snapshotId}` +
+            (task.contextMeta.blastRadiusLevel ? ` | BlastRadius=${task.contextMeta.blastRadiusLevel}` : '') + '\n'
+          : '';
         resultBlock.textContent = `📋 [TASK DETAIL: ${task.taskId}]\n狀態: ${task.status}\n耗時: ${task.durationMs || '--'}ms\n` +
+          cgLine +
           (task.data ? `\n✨ [產出結果]:\n${JSON.stringify(task.data, null, 2)}\n` : '') +
           (task.error ? `\n❌ [錯誤摘要]:\n${JSON.stringify(task.error, null, 2)}\n` : '') +
           "\n" + resultBlock.textContent;

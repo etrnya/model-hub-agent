@@ -31,6 +31,9 @@
    * `services/cascading_executor.js`：
      * **Phase 1 (PRE_DISPATCH)**：`compileCodeGraphContext()` 自動識別角色與任務策略，透過 `CallGraphEngine` 執行雙向拓撲遍歷 (`buildCallGraph`) 與衝擊範圍評估 (`assessBlastRadius`)，並經 `EvidenceAdmissionEngine` 與 `ContextCompiler` 封裝注入。
      * **Phase 2 (SELF_CORRECTION)**：當 `VerificationGate` 判定內容驗證失敗 (`VERIFICATION_CONTENT_FAIL`) 時，自動將 CodeGraph 遍歷深度動態擴展至 `depth=3` 重新編譯上下文並寫入 `_correction_feedback.expanded_context_depth`，支援多跳呼叫邊界自癒。
+6. **觀測遙測與 API 冪等防重強化 (Phase 2 Observability & Idempotency)**：
+   * `x-idempotency-key` 冪等防重：`TaskManager.submitTask()` 與 `POST /api/tasks` 支援 `x-idempotency-key` 標頭，對相同 Payload 自動去重並回傳既有 `taskId`（`deduplicated: true`），對不同 Payload 重複使用同一 Key 則嚴格攔截並回傳 `409 IDEMPOTENCY_KEY_CONFLICT`。
+   * CodeGraph 編譯遙測指標：`cascadingExecutor.getCodeGraphTelemetry()` 與 `getTaskTelemetry(taskId)` 自動記錄每次編譯之 `policyName`、`traversalDepth`、`measuredTokens`、`snapshotId`、`blastRadiusLevel` 與自癒擴展次數，並同步掛載至 `GET /api/tasks/:id` (`contextMeta`)、`GET /api/stats` (`codeGraphTelemetry`) 與 Web 控制台 (`observability/dashboard.html`)。
 
 ---
 

@@ -22,6 +22,7 @@ const MAX_STORE_CAPACITY = 50;
 class TaskManager {
   constructor(options = {}) {
     this.tasks = new Map(); // key: taskId, value: TaskRecord
+    this.idempotencyMap = new Map(); // key: idempotencyKey, value: { taskId, payloadHash }
     this.queue = [];        // FIFO array of taskIds
     this.activeCount = 0;
     this.eventSequence = 0;
@@ -35,15 +36,38 @@ class TaskManager {
   }
 
   /**
-   * 提交新任務並進行原子容量審查與角色合成
+   * 提交新任務並進行原子容量審查、角色合成與冪等防重
    * @param {Object} userInput - 使用者輸入參數
-   * @returns {Object} { taskId, status: 'QUEUED', createdAt }
+   * @param {Object} [options] - 附加選項 (如 { idempotencyKey })
+   * @returns {Object} { taskId, status, createdAt, deduplicated? }
    */
-  submitTask(userInput) {
+  submitTask(userInput, options = {}) {
     if (!userInput || typeof userInput !== 'object' || Array.isArray(userInput)) {
       const err = new Error("INVALID_PARAMETER: Request body must be a valid JSON object.");
       err.statusCode = 400;
       throw err;
+    }
+
+    let rawIdempotencyKey = undefined;
+    if (options && Object.hasOwn(options, 'idempotencyKey') && options.idempotencyKey !== undefined) {
+      rawIdempotencyKey = options.idempotencyKey;
+    } else if (Object.hasOwn(userInput, 'idempotencyKey')) {
+      rawIdempotencyKey = userInput.idempotencyKey;
+    }
+
+    let idempotencyKey = null;
+    if (rawIdempotencyKey !== undefined) {
+      if (
+        typeof rawIdempotencyKey !== 'string' ||
+        !rawIdempotencyKey.trim() ||
+        rawIdempotencyKey.trim().length > 128 ||
+        !/^[A-Za-z0-9_.:-]+$/.test(rawIdempotencyKey.trim())
+      ) {
+        const err = new Error("INVALID_PARAMETER: 'x-idempotency-key' must be a non-empty alphanumeric key (max 128 chars).");
+        err.statusCode = 400;
+        throw err;
+      }
+      idempotencyKey = rawIdempotencyKey.trim();
     }
 
     let taskPayload;
@@ -138,6 +162,43 @@ class TaskManager {
       tier = userInput.tier || 'high';
     }
 
+    // 1.5 冪等鍵 (x-idempotency-key) 查重與 Payload 衝突防護
+    let payloadHash = null;
+    if (idempotencyKey) {
+      payloadHash = crypto.createHash('sha256').update(JSON.stringify({
+        role: selectedRoleId,
+        objective: taskPayload.objective,
+        tier,
+        constraints: taskPayload.constraints,
+        tags: taskPayload.tags,
+        action: taskPayload.action || null,
+        targetFiles: taskPayload.targetFiles || null,
+        targetSymbols: taskPayload.targetSymbols || null,
+        tenantId: taskPayload.tenantId || null
+      })).digest('hex');
+
+      if (this.idempotencyMap.has(idempotencyKey)) {
+        const existingEntry = this.idempotencyMap.get(idempotencyKey);
+        const existingTask = this.tasks.get(existingEntry.taskId);
+        if (existingTask) {
+          if (existingEntry.payloadHash !== payloadHash) {
+            const err = new Error("IDEMPOTENCY_KEY_CONFLICT: The provided x-idempotency-key is already bound to a different task payload.");
+            err.type = 'IDEMPOTENCY_KEY_CONFLICT';
+            err.statusCode = 409;
+            throw err;
+          }
+          return {
+            taskId: existingTask.taskId,
+            status: existingTask.status,
+            createdAt: existingTask.createdAt,
+            deduplicated: true
+          };
+        } else {
+          this.idempotencyMap.delete(idempotencyKey);
+        }
+      }
+    }
+
     // 2. 先消耗排隊名額，再檢查容量（避免有空閒執行名額時誤拒絕）
     this._pumpQueue();
 
@@ -164,6 +225,10 @@ class TaskManager {
       }
 
       if (oldestTerminalId) {
+        const evictedTask = this.tasks.get(oldestTerminalId);
+        if (evictedTask && evictedTask.idempotencyKey) {
+          this.idempotencyMap.delete(evictedTask.idempotencyKey);
+        }
         this.tasks.delete(oldestTerminalId);
       } else {
         // 50 筆全為在途任務 (極端飽和防護)
@@ -183,6 +248,7 @@ class TaskManager {
 
     const taskRecord = {
       taskId,
+      idempotencyKey,
       status: 'QUEUED',
       createdAt,
       startTime: null,
@@ -192,11 +258,15 @@ class TaskManager {
       taskPayload,
       outputSchema,
       tier,
+      contextMeta: null,
       data: null,
       error: null
     };
 
     this.tasks.set(taskId, taskRecord);
+    if (idempotencyKey && payloadHash) {
+      this.idempotencyMap.set(idempotencyKey, { taskId, payloadHash });
+    }
     this.queue.push(taskId);
 
     // 廣播 TASK_QUEUED 生命週期事件
@@ -292,6 +362,16 @@ class TaskManager {
       if (task.startTime) {
         task.durationMs = Math.round(performance.now() - task.startTime);
       }
+      try {
+        const cascadingExecutor = require('./cascading_executor');
+        const cgMeta = (task.taskPayload && task.taskPayload.compiledContextMeta) ||
+          (typeof cascadingExecutor.getTaskTelemetry === 'function' ? cascadingExecutor.getTaskTelemetry(task.taskId) : null);
+        if (cgMeta) {
+          task.contextMeta = cgMeta;
+        }
+      } catch (_) {
+        // Non-fatal telemetry lookup
+      }
       // 只有在底層 Promise 真正 settle 後，名額才遞減並觸發下一個任務
       this.activeCount--;
       this._pumpQueue();
@@ -334,6 +414,7 @@ class TaskManager {
       objective: t.objective,
       createdAt: t.createdAt,
       durationMs: t.durationMs,
+      contextMeta: t.contextMeta || null,
       data: t.data,
       error: t.error
     });
@@ -351,7 +432,8 @@ class TaskManager {
         role: t.role,
         objective: t.objective,
         createdAt: t.createdAt,
-        durationMs: t.durationMs
+        durationMs: t.durationMs,
+        contextMeta: t.contextMeta || null
       });
     }
 
@@ -364,6 +446,7 @@ class TaskManager {
    */
   clearStore() {
     this.tasks.clear();
+    this.idempotencyMap.clear();
     this.queue = [];
     this.activeCount = 0;
   }

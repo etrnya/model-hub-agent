@@ -375,6 +375,100 @@ async function run() {
     }
   });
 
+  await test('[C4-T9] Phase 2 TaskManager x-idempotency-key deduplicates identical payloads and rejects conflicts with 409', async () => {
+    let dispatchCount = 0;
+    const tm = new taskManagerModule.TaskManager({
+      dispatchFn: async () => {
+        dispatchCount++;
+        await new Promise(r => setTimeout(r, 20));
+        return { analysis: 'Idempotent', result: 'OK' };
+      }
+    });
+
+    // 1. First submission with idempotency key
+    const sub1 = tm.submitTask(
+      { objective: 'Idempotent deployment check', tier: 'high' },
+      { idempotencyKey: 'idem-key-alpha-01' }
+    );
+    assert.ok(sub1.taskId, 'Expected valid taskId on first submission');
+    assert.strictEqual(sub1.deduplicated, undefined);
+
+    // 2. Duplicate submission with identical payload and same idempotency key
+    const sub2 = tm.submitTask(
+      { objective: 'Idempotent deployment check', tier: 'high' },
+      { idempotencyKey: 'idem-key-alpha-01' }
+    );
+    assert.strictEqual(sub2.taskId, sub1.taskId, 'Must return exact same taskId');
+    assert.strictEqual(sub2.deduplicated, true, 'Must flag deduplicated: true');
+
+    // 3. Conflicting payload with same idempotency key -> 409 IDEMPOTENCY_KEY_CONFLICT
+    assert.throws(() => {
+      tm.submitTask(
+        { objective: 'Different objective on same key', tier: 'high' },
+        { idempotencyKey: 'idem-key-alpha-01' }
+      );
+    }, (err) => {
+      assert.strictEqual(err.statusCode, 409);
+      assert.strictEqual(err.type, 'IDEMPOTENCY_KEY_CONFLICT');
+      return true;
+    });
+
+    // 4. Malformed idempotency key -> 400 INVALID_PARAMETER
+    assert.throws(() => {
+      tm.submitTask(
+        { objective: 'Malformed key test' },
+        { idempotencyKey: 'bad key with spaces!' }
+      );
+    }, (err) => {
+      assert.strictEqual(err.statusCode, 400);
+      return true;
+    });
+
+    await new Promise(r => setTimeout(r, 40));
+    assert.strictEqual(dispatchCount, 1, 'Underlying dispatcher must only be called once for deduplicated submissions');
+  });
+
+  await test('[C4-T10] Phase 2 CodeGraph compilation telemetry is recorded in getCodeGraphTelemetry and attached to TaskManager.getTask', async () => {
+    cascadingExecutor.resetCodeGraphTelemetry();
+
+    const tm = new taskManagerModule.TaskManager({
+      dispatchFn: async (payload) => {
+        const compiled = await cascadingExecutor.compileCodeGraphContext(payload, {
+          workspaceRoot,
+          codeGraphAdapter: mockAdapter
+        });
+        return {
+          analysis: 'Telemetry verified',
+          result: compiled ? 'Compiled' : 'None'
+        };
+      }
+    });
+
+    const sub = tm.submitTask({
+      role: 'code_reviewer',
+      objective: 'Verify telemetry attachment',
+      action: 'BUG_FIX',
+      targetFiles: ['services/token_budget_guard.js'],
+      targetSymbols: ['TokenBudgetGuard']
+    });
+
+    await new Promise(r => setTimeout(r, 40));
+
+    const taskDetail = tm.getTask(sub.taskId);
+    assert.strictEqual(taskDetail.status, 'COMPLETED');
+    assert.ok(taskDetail.contextMeta, 'Expected contextMeta attached to completed task');
+    assert.strictEqual(taskDetail.contextMeta.taskId, sub.taskId);
+    assert.strictEqual(taskDetail.contextMeta.roleId, 'code_reviewer');
+    assert.strictEqual(taskDetail.contextMeta.policyName, 'REVIEW_BUGFIX');
+    assert.strictEqual(taskDetail.contextMeta.snapshotId, 'snap-c4-test');
+    assert.ok(taskDetail.contextMeta.measuredTokens > 0, 'Expected positive measuredTokens in contextMeta');
+
+    const globalTelemetry = cascadingExecutor.getCodeGraphTelemetry();
+    assert.strictEqual(globalTelemetry.summary.totalCompilations, 1);
+    assert.ok(globalTelemetry.summary.totalCompiledTokens > 0);
+    assert.strictEqual(globalTelemetry.recentCompilations[0].taskId, sub.taskId);
+  });
+
   console.log(`\n======================================================`);
   console.log(`Phase 1-C4 Pipeline Wiring Complete: ${passed} Passed, ${failed} Failed`);
   console.log(`======================================================\n`);
