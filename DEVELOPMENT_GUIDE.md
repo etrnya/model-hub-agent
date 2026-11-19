@@ -71,9 +71,16 @@
 
 ---
 
-## 5. 歷史版本標籤參考
+## 5. 歷史版本標籤與凍結基線紀錄
 
-* `v1.3.0-phase-3`（`ed1e7bb`, 2026-06-29）：早期經典版（已同步於 GitHub `origin/main`）。
+* `v1.3.0-phase-3`（`ed1e7bb`, 2026-06-29）：早期經典版。
 * `v1.4.0-phase-1-consolidated`（`e88276f`, 2026-11-04）：P0-B / P1-A / P1-B 整合版。
-* 本機 `main` 目前已整合 P1-C1 ～ P1-C4（待用戶明確指示後方可 `git push`）。
+* `v1.5.0`（`32158e0`, 2026-11-19）：Evidence-First Agent Infrastructure 定位升級、Apache 2.0 授權與文件版本對齊。
+* **Phase 1 修復凍結基線 (`92a52e0`, 2026-11-19 — FROZEN)**：
+  * **正式凍結聲明**：Phase 1 本輪修復完成。預設跨程序鎖定採 Strict Fail-Closed（`CROSS_PROCESS_ATOMIC_LOCKFILE_STRICT`），避免自動清除其他程序鎖檔所引發的競態風險。Best-Effort Recovery（`CROSS_PROCESS_ATOMIC_LOCKFILE_BEST_EFFORT_RECOVERY`）保留為明確選擇的相容性能力，但不提供 Strict 等級或 OS 核心鎖（`flock`/`LockFileEx`）等價之安全保證。FD 證據驗證（6 欄位 + 64 字元 `emittedContentSha256` 強制核驗）與 Idempotency Canonicalization（完整 `Reflect.ownKeys` + `getOwnPropertyDescriptors` 嚴格 JSON 契約）之既有缺失已完成修正。全倉盤點確認 **0 個產品路徑** 啟用 `allowBestEffortCrashRecovery: true`（僅 `tests/test_remediation_fault_injection.js` 測試使用）。**21 / 21 離線測試套件全數通過（Exit Code: 0）**。此基線進入 **FROZEN**，後續變更須另行提出需求與審查。
+  * **Strict 鎖定維運操作要求**：
+    1. Strict 模式發生鎖定逾時時，呼叫端應留下可追蹤的錯誤紀錄。
+    2. 人工清理殘留鎖檔前，必須先確認原持有程序（PID）確實已停止。
+    3. 清理流程必須避免在仍有程序執行時刪除鎖檔。
+    4. 嚴禁將 Best-Effort Recovery 描述為與 OS 核心鎖等價之安全保證。
 
