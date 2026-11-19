@@ -81,10 +81,7 @@ memoryManager.initCollection().catch(err => {
   console.warn(`[Agent OS Server] Qdrant collection init skipped or failed: ${err.message}`);
 });
 
-// Seed initial healthy heartbeats so the dashboard looks great immediately
-heartbeatRegistry.record('deepseek', 1200, true);
-heartbeatRegistry.record('vertex-ai', 1800, true);
-heartbeatRegistry.record('nvidia-nim', 2500, true);
+// Do NOT seed synthetic healthy heartbeats at startup; providers remain UNKNOWN/INITIALIZING until verified by real health checks.
 
 const server = http.createServer(async (req, res) => {
   // Enable CORS

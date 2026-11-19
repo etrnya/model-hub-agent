@@ -296,17 +296,26 @@ async function compileCodeGraphContext(context, options = {}) {
       traversalDepth: retrievalPlan.traversalDepth,
       blastRadius: blastRadiusReports.length > 0 ? blastRadiusReports : undefined
     };
+    const isoMeasuredTokens = (isoResult.envelope && typeof isoResult.envelope.measuredTokens === 'number')
+      ? isoResult.envelope.measuredTokens
+      : null;
+    const isoEstimatedTokens = isoMeasuredTokens === null ? Math.ceil(isoCtxText.length / 4) : null;
+    const isoTokenMethod = (isoResult.envelope && isoResult.envelope.tokenEstimationMethod)
+      || (isoMeasuredTokens !== null ? 'verified_estimator' : 'char_div_4_fallback');
     recordCodeGraphTelemetry(effectiveTaskId, {
       taskId: effectiveTaskId,
       timestamp: new Date().toISOString(),
       roleId: retrievalPlan.roleId || 'default',
       policyName: retrievalPlan.policyName || 'BALANCED_DEFAULT',
       traversalDepth: retrievalPlan.traversalDepth || 1,
-      measuredTokens: (isoResult.envelope && isoResult.envelope.measuredTokens) || Math.ceil(isoCtxText.length / 4),
+      measuredTokens: isoMeasuredTokens,
+      estimatedTokens: isoEstimatedTokens,
+      tokenEstimationMethod: isoTokenMethod,
       totalItems: (isoResult.envelope && Array.isArray(isoResult.envelope.compiledItems)) ? isoResult.envelope.compiledItems.length : 1,
       rejectedCount: (isoResult.envelope && Array.isArray(isoResult.envelope.rejectedItems)) ? isoResult.envelope.rejectedItems.length : 0,
       dlpRedactedCount: (isoResult.envelope && isoResult.envelope.metadata && isoResult.envelope.metadata.dlpRedactedCount) || 0,
-      snapshotId: (isoResult.admissionReceipt && isoResult.admissionReceipt.indexSnapshotId) || 'isolated-snap',
+      snapshotId: (isoResult.admissionReceipt && isoResult.admissionReceipt.snapshotId) || 'isolated-snap',
+      isolationTier: (isoResult.envelope && isoResult.envelope.isolationTier) || 'TIER_2_JS_ISOLATED',
       isolated: true,
       decisionAction: isoResult.decision ? isoResult.decision.action : 'ALLOW',
       blastRadiusLevel: blastRadiusReports[0] ? blastRadiusReports[0].assessedBlastRadius : null,
@@ -327,13 +336,18 @@ async function compileCodeGraphContext(context, options = {}) {
     traversalDepth: retrievalPlan.traversalDepth,
     blastRadius: blastRadiusReports.length > 0 ? blastRadiusReports : undefined
   };
+  const stdMeasuredTokens = typeof compResult.measuredTokens === 'number'
+    ? compResult.measuredTokens
+    : ((stdMetadata.tokenAudit && typeof stdMetadata.tokenAudit.measuredTokens === 'number') ? stdMetadata.tokenAudit.measuredTokens : null);
   recordCodeGraphTelemetry(effectiveTaskId, {
     taskId: effectiveTaskId,
     timestamp: new Date().toISOString(),
     roleId: retrievalPlan.roleId || 'default',
     policyName: retrievalPlan.policyName || 'BALANCED_DEFAULT',
     traversalDepth: retrievalPlan.traversalDepth || 1,
-    measuredTokens: compResult.measuredTokens || (stdMetadata.tokenAudit && stdMetadata.tokenAudit.measuredTokens) || 0,
+    measuredTokens: stdMeasuredTokens,
+    estimatedTokens: stdMeasuredTokens === null ? Math.ceil((compResult.contextText || '').length / 4) : null,
+    tokenEstimationMethod: (stdMetadata.tokenAudit && stdMetadata.tokenAudit.method) || (stdMeasuredTokens !== null ? 'verified_estimator' : 'char_div_4_fallback'),
     totalItems: stdMetadata.totalItems || (Array.isArray(compResult.compiledItems) ? compResult.compiledItems.length : 0),
     rejectedCount: stdMetadata.rejectedCount || 0,
     dlpRedactedCount: stdMetadata.dlpRedactedCount || 0,

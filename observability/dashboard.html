@@ -451,10 +451,19 @@
         cacheItems.forEach(item => {
           const row = document.createElement('tr');
           row.className = "hover:bg-white/5 transition-colors";
-          row.innerHTML = `
-            <td class="px-4 py-3 font-semibold text-gray-200 truncate max-w-md" title="${item.objective}">${item.objective}</td>
-            <td class="px-4 py-3 text-right text-emerald-400 font-bold font-mono">Active (TTL)</td>
-          `;
+
+          const tdObj = document.createElement('td');
+          tdObj.className = "px-4 py-3 font-semibold text-gray-200 truncate max-w-md";
+          const safeObjective = String(item && item.objective !== undefined ? item.objective : '');
+          tdObj.setAttribute('title', safeObjective);
+          tdObj.textContent = safeObjective;
+
+          const tdStatus = document.createElement('td');
+          tdStatus.className = "px-4 py-3 text-right text-emerald-400 font-bold font-mono";
+          tdStatus.textContent = "Active (TTL)";
+
+          row.appendChild(tdObj);
+          row.appendChild(tdStatus);
           memoryBody.appendChild(row);
         });
       }

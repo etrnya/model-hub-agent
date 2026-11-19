@@ -726,6 +726,11 @@ class ContextCompiler {
       envelopeSha256: contextTextHash
     });
 
+    const allItemsFdVerified = compiledItems.length > 0 && compiledItems.every(i => i && i.fdSnapshotVerified === true);
+    const derivedIsolationTier = (options.fdSnapshotVerified === true || allItemsFdVerified)
+      ? 'TIER_4_VERIFIED_FD'
+      : 'TIER_2_JS_ISOLATED';
+
     const candidateEnvelope = isDiagnosticChannel
       ? Object.freeze({
           schemaVersion: '1.0',
@@ -734,6 +739,7 @@ class ContextCompiler {
           tenantId: taskContext.tenantId,
           targetSymbol,
           snapshotId,
+          isolationTier: derivedIsolationTier,
           diagnosticConfidence,
           diagnosticReason: diagnosticReason || 'TARGET_NOT_FOUND',
           partialSymbolIndex: options.partialSymbolIndex || [],
@@ -746,8 +752,13 @@ class ContextCompiler {
           tenantId: taskContext.tenantId,
           targetSymbol,
           snapshotId,
-          isolationTier: 'TIER_4_VERIFIED_FD',
+          isolationTier: derivedIsolationTier,
           contextText,
+          measuredTokens: compResult.measuredTokens,
+          tokenEstimationMethod: (compResult.metadata && compResult.metadata.tokenAudit && compResult.metadata.tokenAudit.method) || 'verified_estimator',
+          compiledItems,
+          rejectedItems: compResult.rejectedItems || [],
+          metadata: compResult.metadata || {},
           aggregateEvidenceStatus,
           retrievalStatus,
           provenanceToken,

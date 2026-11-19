@@ -401,23 +401,27 @@ class TenantIsolatedCache {
 // Tier 3: Execution Permission Hard Isolation (C3.3-T5, C3.3-T6)
 // ============================================================================
 
-const WHITELISTED_READ_ONLY_TOOLS = Object.freeze(new Set([
+const _WHITELISTED_READ_ONLY_TOOLS = new Set([
   'read_file',
   'codegraph_search',
   'codegraph_context',
   'codegraph_node',
   'codegraph_explore',
   'codegraph_trace'
-]));
+]);
 
-const FORBIDDEN_MUTATING_TOOLS = Object.freeze(new Set([
+const _FORBIDDEN_MUTATING_TOOLS = new Set([
   'write_file',
   'edit_file',
   'run_command',
   'delete_file',
   'bash',
   'powershell'
-]));
+]);
+
+// Exported as immutable frozen arrays (never mutable Set instances)
+const WHITELISTED_READ_ONLY_TOOLS = Object.freeze([..._WHITELISTED_READ_ONLY_TOOLS]);
+const FORBIDDEN_MUTATING_TOOLS = Object.freeze([..._FORBIDDEN_MUTATING_TOOLS]);
 
 class ExecutionBoundaryGuard {
   constructor(options = {}) {
@@ -428,9 +432,20 @@ class ExecutionBoundaryGuard {
       configurable: false,
       enumerable: true
     });
-    this.allowedTools = options.allowedTools
-      ? new Set(options.allowedTools)
-      : WHITELISTED_READ_ONLY_TOOLS;
+    // Never allow external options.allowedTools to expand beyond the immutable read-only whitelist
+    const effectiveAllowed = new Set();
+    if (options.allowedTools && typeof options.allowedTools[Symbol.iterator] === 'function') {
+      for (const t of options.allowedTools) {
+        if (typeof t === 'string' && _WHITELISTED_READ_ONLY_TOOLS.has(t) && !_FORBIDDEN_MUTATING_TOOLS.has(t)) {
+          effectiveAllowed.add(t);
+        }
+      }
+    } else {
+      for (const t of _WHITELISTED_READ_ONLY_TOOLS) {
+        effectiveAllowed.add(t);
+      }
+    }
+    this._isAllowedTool = (name) => effectiveAllowed.has(name) && !_FORBIDDEN_MUTATING_TOOLS.has(name);
   }
 
   /**
@@ -443,7 +458,7 @@ class ExecutionBoundaryGuard {
     if (this.allowExecution !== false) {
       throw new ContextIsolationError('TOOL_EXECUTION_FORBIDDEN', 'Execution boundary flag tampered');
     }
-    if (FORBIDDEN_MUTATING_TOOLS.has(toolName) || !this.allowedTools.has(toolName)) {
+    if (_FORBIDDEN_MUTATING_TOOLS.has(toolName) || !this._isAllowedTool(toolName)) {
       throw new ContextIsolationError(
         'TOOL_EXECUTION_FORBIDDEN',
         `Tool '${toolName}' is strictly forbidden inside Phase 1-C3.3 read-only isolation boundary`
@@ -453,7 +468,7 @@ class ExecutionBoundaryGuard {
   }
 
   /**
-   * C3.3-T6: Blocks any non-read-only IPC request when allowExecution === false.
+   * C3.3-T6: Blocks any non-read-only IPC request or missing tool identifier when allowExecution === false.
    */
   authorizeIpcRequest(ipcRequest) {
     if (!ipcRequest || typeof ipcRequest !== 'object') {
@@ -465,9 +480,8 @@ class ExecutionBoundaryGuard {
         `IPC request mode '${ipcRequest.mode}' blocked by allowExecution: false`
       );
     }
-    if (ipcRequest.toolName) {
-      this.authorizeToolCall(ipcRequest.toolName);
-    }
+    // Always enforce explicit toolName authorization (no anonymous READ_ONLY bypass)
+    this.authorizeToolCall(ipcRequest.toolName);
     return true;
   }
 }
@@ -481,27 +495,125 @@ const DEFAULT_LOCKDOWN_BASE_DIR = process.platform === 'win32'
   : '/var/lib/antigravity';
 
 /**
- * Default cross-platform lock binding tracking active locks per file descriptor
- * and recording lock operation sequence for deterministic TOCTOU audit.
+ * In-process lock simulator strictly for deterministic single-process unit testing.
+ * HONESTY NOTICE: Uses an in-memory Map and does NOT provide cross-process OS mutual exclusion.
  */
 function createDefaultLockBinding() {
   const activeLocks = new Map();
   const operationLog = [];
   return {
+    lockSemantics: 'SIMULATED_IN_PROCESS',
     operationLog,
     acquireLock(fd, mode, _timeoutMs = 5000) {
       if (typeof fd !== 'number' || fd < 0) return false;
-      operationLog.push({ op: 'acquireLock', fd, mode, timestamp: Date.now() });
+      operationLog.push({ op: 'acquireLock', fd, mode, semantics: 'SIMULATED_IN_PROCESS', timestamp: Date.now() });
       activeLocks.set(fd, mode);
       return true;
     },
     releaseLock(fd) {
-      operationLog.push({ op: 'releaseLock', fd, timestamp: Date.now() });
+      operationLog.push({ op: 'releaseLock', fd, semantics: 'SIMULATED_IN_PROCESS', timestamp: Date.now() });
       activeLocks.delete(fd);
       return true;
     },
     isLocked(fd) {
       return activeLocks.has(fd);
+    }
+  };
+}
+
+/**
+ * Real cross-process atomic lockfile binding using O_CREAT | O_EXCL ('wx').
+ * Provides genuine mutual exclusion across independent OS processes with stale-PID crash recovery.
+ * HONESTY NOTICE: Implements CROSS_PROCESS_ATOMIC_LOCKFILE (exclusive mutex), not native OS LockFileEx/flock.
+ */
+function createCrossProcessFileLockBinding(options = {}) {
+  const lockFilePath = options.lockFilePath;
+  if (typeof lockFilePath !== 'string' || !lockFilePath) {
+    throw new ContextIsolationError('INVALID_LOCK_PATH', 'lockFilePath is required for cross-process file lock');
+  }
+  const staleLockMs = Number.isInteger(options.staleLockMs) && options.staleLockMs > 0 ? options.staleLockMs : 15000;
+  const retryIntervalMs = Number.isInteger(options.retryIntervalMs) && options.retryIntervalMs > 0 ? options.retryIntervalMs : 15;
+  const operationLog = [];
+  const heldFds = new Map();
+
+  function isPidAlive(pid) {
+    if (!Number.isInteger(pid) || pid <= 0) return false;
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch (err) {
+      return err && err.code === 'EPERM';
+    }
+  }
+
+  function tryRecoverStaleLock() {
+    try {
+      const raw = fs.readFileSync(lockFilePath, 'utf-8');
+      const parsed = JSON.parse(raw);
+      const ageMs = Date.now() - (parsed.acquiredAt || 0);
+      if ((parsed.pid && !isPidAlive(parsed.pid)) || ageMs > staleLockMs) {
+        fs.unlinkSync(lockFilePath);
+        return true;
+      }
+    } catch (_) {
+      // Lock may already be released or mid-write
+    }
+    return false;
+  }
+
+  function busyWait(ms) {
+    const sab = new SharedArrayBuffer(4);
+    const view = new Int32Array(sab);
+    Atomics.wait(view, 0, 0, ms);
+  }
+
+  return {
+    lockSemantics: 'CROSS_PROCESS_ATOMIC_LOCKFILE',
+    lockFilePath,
+    operationLog,
+    acquireLock(fd, mode, timeoutMs = 5000) {
+      if (typeof fd !== 'number' || fd < 0) return false;
+      const deadline = Date.now() + timeoutMs;
+      while (Date.now() <= deadline) {
+        try {
+          const lockFd = fs.openSync(lockFilePath, 'wx', 0o600);
+          try {
+            const payload = JSON.stringify({ pid: process.pid, fd, mode, acquiredAt: Date.now() });
+            fs.writeSync(lockFd, payload);
+            fs.fsyncSync(lockFd);
+          } finally {
+            fs.closeSync(lockFd);
+          }
+          heldFds.set(fd, mode);
+          operationLog.push({ op: 'acquireLock', fd, mode, semantics: 'CROSS_PROCESS_ATOMIC_LOCKFILE', pid: process.pid, timestamp: Date.now() });
+          return true;
+        } catch (err) {
+          if (err && err.code === 'EEXIST') {
+            tryRecoverStaleLock();
+            if (Date.now() >= deadline) return false;
+            busyWait(retryIntervalMs);
+            continue;
+          }
+          return false;
+        }
+      }
+      return false;
+    },
+    releaseLock(fd) {
+      const wasHeld = heldFds.has(fd);
+      heldFds.delete(fd);
+      if (wasHeld) {
+        try {
+          fs.unlinkSync(lockFilePath);
+        } catch (_) {
+          // Ignore if already removed
+        }
+      }
+      operationLog.push({ op: 'releaseLock', fd, semantics: 'CROSS_PROCESS_ATOMIC_LOCKFILE', pid: process.pid, timestamp: Date.now() });
+      return wasHeld;
+    },
+    isLocked(fd) {
+      return heldFds.has(fd);
     }
   };
 }
@@ -1399,6 +1511,7 @@ module.exports = {
   WHITELISTED_READ_ONLY_TOOLS,
   FORBIDDEN_MUTATING_TOOLS,
   createDefaultLockBinding,
+  createCrossProcessFileLockBinding,
   defaultLockBinding,
   assertSandboxNotLocked,
   triggerGlobalLockdown,

@@ -9,7 +9,7 @@
 const path = require('path');
 const fs = require('fs').promises;
 const crypto = require('crypto');
-const { AdmissionReceiptIssuer } = require('./isolation_boundary');
+const { AdmissionReceiptIssuer, readImmutableFileSnapshot } = require('./isolation_boundary');
 
 /**
  * Escapes characters for regular expressions.
@@ -88,6 +88,9 @@ class EvidenceAdmissionEngine {
     this.codeGraphAdapter = dependencies.codeGraphAdapter;
     this.callGraphEngine = dependencies.callGraphEngine || null;
     this.workspaceRoot = path.resolve(dependencies.workspaceRoot || dependencies.codeGraphAdapter.projectPath || process.cwd());
+    this.snapshotReader = typeof dependencies.snapshotReader === 'function'
+      ? dependencies.snapshotReader
+      : readImmutableFileSnapshot;
   }
 
   /**
@@ -207,21 +210,26 @@ class EvidenceAdmissionEngine {
       const startLine = parsedStart;
       const endLine = parsedEnd;
 
-      // 3. Single-Read Immutable Evidence Snapshot (Single I/O)
+      // 3. Single-FD Immutable Evidence Snapshot (Single I/O + 4-Tuple fstat verification)
       let rawBuffer = null;
       let fileSha256 = '';
+      let statSnapshot = null;
+      let fdSnapshotVerified = false;
       try {
-        rawBuffer = await fs.readFile(realPath);
-        fileSha256 = crypto.createHash('sha256').update(rawBuffer).digest('hex');
+        const snapshot = this.snapshotReader(realPath);
+        rawBuffer = snapshot.getBufferCopy();
+        fileSha256 = snapshot.sha256;
+        statSnapshot = snapshot.statSnapshot || null;
+        fdSnapshotVerified = true;
       } catch (readErr) {
         summary.unverifiedCount++;
         rejectedEvidence.push({
           sourceEvidenceId: evidenceId,
           symbol,
           filePath,
-          rejectionReason: 'FILE_READ_ERROR',
+          rejectionReason: readErr && readErr.code === 'FILE_CONCURRENTLY_MODIFIED' ? 'FILE_CONCURRENTLY_MODIFIED' : 'FILE_READ_ERROR',
           category: 'IO_ERROR',
-          details: `Failed to read physical file: ${readErr.message}`
+          details: `Failed to capture immutable file snapshot: ${readErr.message}`
         });
         continue;
       }
@@ -374,7 +382,9 @@ class EvidenceAdmissionEngine {
         relevanceScore,
         warning,
         sourceFileSha256: fileSha256,
-        sourceSnippetSha256: snippetSha256
+        sourceSnippetSha256: snippetSha256,
+        fdSnapshotVerified,
+        statSnapshot
       });
     }
 

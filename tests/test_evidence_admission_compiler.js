@@ -100,7 +100,7 @@ async function runTests() {
   // ----------------------------------------------------
   console.log('[Section 1: EvidenceAdmissionEngine Line Provenance & Boundary Tests]');
 
-  // C3.2-T1 / INV-R1.1: 實體檔案 Hash === SQLite 快照 Hash -> SOURCE_MATCHED, fs.readFile = 1, verifyLineProvenance = 0
+  // C3.2-T1 / INV-R1.1: 實體檔案 Hash === SQLite 快照 Hash -> SOURCE_MATCHED, single FD snapshot read = 1, verifyLineProvenance = 0
   try {
     let provenanceCallCount = 0;
     const originalVerify = callGraphEngine.verifyLineProvenance;
@@ -109,11 +109,11 @@ async function runTests() {
       return originalVerify ? await originalVerify.apply(callGraphEngine, args) : { verified: true };
     };
 
-    let readFileCount = 0;
-    const originalReadFile = fs.readFile;
-    fs.readFile = async (...args) => {
-      readFileCount++;
-      return await originalReadFile.apply(fs, args);
+    let snapshotReadCount = 0;
+    const originalSnapshotReader = admissionEngine.snapshotReader;
+    admissionEngine.snapshotReader = (...args) => {
+      snapshotReadCount++;
+      return originalSnapshotReader(...args);
     };
 
     const rawNodes = [{
@@ -130,19 +130,20 @@ async function runTests() {
       result = await admissionEngine.evaluateAdmission(rawNodes, 'snap-001', 'FEATURE');
     } finally {
       callGraphEngine.verifyLineProvenance = originalVerify;
-      fs.readFile = originalReadFile;
+      admissionEngine.snapshotReader = originalSnapshotReader;
     }
 
     assert.strictEqual(result.admittedEvidence.length, 1);
     assert.strictEqual(result.admittedEvidence[0].validationStatus, 'SOURCE_MATCHED');
+    assert.strictEqual(result.admittedEvidence[0].fdSnapshotVerified, true, 'Must carry fdSnapshotVerified: true proof');
     assert.strictEqual(result.admittedEvidence[0].confidence, 'HIGH');
     assert.strictEqual(result.admittedEvidence[0].contentCompleteness, 'FULL');
     assert.strictEqual(result.admittedEvidence[0].isTruncated, false);
     assert.strictEqual(result.admittedEvidence[0].sourceSnippetSha256.length, 64);
     assert.strictEqual(result.admittedEvidence[0].sourceFileSha256.length, 64);
     assert.strictEqual(provenanceCallCount, 0, 'verifyLineProvenance must NEVER be called (0 calls)');
-    assert.strictEqual(readFileCount, 1, 'fs.readFile must be called EXACTLY ONCE (single physical read)');
-    pass('C3.2-T1', 'INV-R1.1: Physical file hash matches snapshot -> SOURCE_MATCHED, fs.readFile = 1, 0 calls to verifyLineProvenance');
+    assert.strictEqual(snapshotReadCount, 1, 'Immutable FD snapshot reader must be called EXACTLY ONCE (single physical read)');
+    pass('C3.2-T1', 'INV-R1.1: Physical file hash matches snapshot -> SOURCE_MATCHED, single FD snapshot = 1, 0 calls to verifyLineProvenance');
   } catch (err) {
     fail('C3.2-T1', 'Physical file hash matches snapshot hash', err);
   }

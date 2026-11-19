@@ -162,20 +162,36 @@ class TaskManager {
       tier = userInput.tier || 'high';
     }
 
-    // 1.5 冪等鍵 (x-idempotency-key) 查重與 Payload 衝突防護
+    // 1.5 冪等鍵 (x-idempotency-key) 查重與完整 Canonical Payload 衝突防護
     let payloadHash = null;
     if (idempotencyKey) {
-      payloadHash = crypto.createHash('sha256').update(JSON.stringify({
+      const canonicalize = (val) => {
+        if (val === undefined) return '__UNDEFINED__';
+        if (val === null || typeof val !== 'object') return val;
+        if (Array.isArray(val)) return val.map(canonicalize);
+        const sorted = {};
+        for (const k of Object.keys(val).sort()) {
+          sorted[k] = canonicalize(val[k]);
+        }
+        return sorted;
+      };
+      const canonicalPayload = canonicalize({
         role: selectedRoleId,
         objective: taskPayload.objective,
         tier,
         constraints: taskPayload.constraints,
         tags: taskPayload.tags,
-        action: taskPayload.action || null,
-        targetFiles: taskPayload.targetFiles || null,
-        targetSymbols: taskPayload.targetSymbols || null,
-        tenantId: taskPayload.tenantId || null
-      })).digest('hex');
+        action: taskPayload.action,
+        targetFiles: taskPayload.targetFiles,
+        targetSymbols: taskPayload.targetSymbols,
+        tenantId: taskPayload.tenantId,
+        taskType: taskPayload.taskType,
+        code_context: taskPayload.code_context !== undefined ? taskPayload.code_context : userInput.code_context,
+        evidenceNodes: taskPayload.evidenceNodes !== undefined ? taskPayload.evidenceNodes : userInput.evidenceNodes,
+        maxExecutionTokens: taskPayload.maxExecutionTokens,
+        outputSchema
+      });
+      payloadHash = crypto.createHash('sha256').update(JSON.stringify(canonicalPayload)).digest('hex');
 
       if (this.idempotencyMap.has(idempotencyKey)) {
         const existingEntry = this.idempotencyMap.get(idempotencyKey);

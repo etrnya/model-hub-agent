@@ -42,7 +42,8 @@ const OFFLINE_SUITES = [
   'test_context_planning_budget.js',
   'test_evidence_admission_compiler.js',
   'test_isolation_degradation_matrix.js',
-  'test_c4_pipeline_wiring.js'
+  'test_c4_pipeline_wiring.js',
+  'test_remediation_fault_injection.js'
 ];
 
 // 2. 外部依賴整合測試清單 (External Integration & Provider Diagnostics)
@@ -110,7 +111,7 @@ function verifyTestInventory(testsDir) {
     missingFiles,
     missingOffline,
     missingExternal,
-    isClean: uncatalogedTests.length === 0 && missingFiles.length === 0
+    isClean: uncataloged.length === 0 && missingFiles.length === 0
   };
 }
 
@@ -233,12 +234,12 @@ async function main() {
 
   let hasManifestError = false;
 
-  // 正向檢查：未登記的測試
-  if (inventory.uncatalogedTests.length > 0) {
+  // 正向檢查：所有未登記的 JS 檔案（含 test_*.js 與工具腳本）
+  if (inventory.uncataloged.length > 0) {
     hasManifestError = true;
-    console.warn("\n⚠️  [WARNING] 發現未列入清單的測試檔案 (Uncataloged Test on Disk):");
-    inventory.uncatalogedTests.forEach(f => console.warn(`   - tests/${f}`));
-    console.warn("   請將新測試登記至 OFFLINE_SUITES 或 EXTERNAL_SUITES，避免靜默遺漏！\n");
+    console.warn("\n⚠️  [WARNING] 發現未列入清單的檔案 (Uncataloged JS on Disk):");
+    inventory.uncataloged.forEach(f => console.warn(`   - tests/${f}`));
+    console.warn("   請將新檔案登記至 OFFLINE_SUITES、EXTERNAL_SUITES 或 UTILITY_SCRIPTS，避免靜默遺漏！\n");
   }
 
   // 反向檢查：已登記但檔案不存在
