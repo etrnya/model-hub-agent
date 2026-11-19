@@ -29,31 +29,35 @@ const codeGraphTelemetryState = {
 };
 
 function recordCodeGraphTelemetry(taskId, entry) {
-  codeGraphTelemetryState.totalCompilations++;
-  codeGraphTelemetryState.totalCompiledTokens += (entry.measuredTokens || 0);
-  codeGraphTelemetryState.totalAdmittedItems += (entry.totalItems || 0);
-  codeGraphTelemetryState.totalRejectedItems += (entry.rejectedCount || 0);
-  codeGraphTelemetryState.totalDlpRedacted += (entry.dlpRedactedCount || 0);
-  if (entry.isSelfCorrectionExpansion) {
-    codeGraphTelemetryState.selfCorrectionExpansions++;
-  }
-  if (entry.isolated) {
-    codeGraphTelemetryState.isolatedPublications++;
-  }
-
-  codeGraphTelemetryState.history.unshift(entry);
-  if (codeGraphTelemetryState.history.length > MAX_TELEMETRY_HISTORY) {
-    codeGraphTelemetryState.history.pop();
-  }
-
-  if (taskId && typeof taskId === 'string') {
-    if (codeGraphTelemetryState.byTaskId.size >= MAX_TASK_TELEMETRY_MAP && !codeGraphTelemetryState.byTaskId.has(taskId)) {
-      const oldestKey = codeGraphTelemetryState.byTaskId.keys().next().value;
-      if (oldestKey !== undefined) {
-        codeGraphTelemetryState.byTaskId.delete(oldestKey);
-      }
+  try {
+    codeGraphTelemetryState.totalCompilations++;
+    codeGraphTelemetryState.totalCompiledTokens += (entry.measuredTokens || 0);
+    codeGraphTelemetryState.totalAdmittedItems += (entry.totalItems || 0);
+    codeGraphTelemetryState.totalRejectedItems += (entry.rejectedCount || 0);
+    codeGraphTelemetryState.totalDlpRedacted += (entry.dlpRedactedCount || 0);
+    if (entry.isSelfCorrectionExpansion) {
+      codeGraphTelemetryState.selfCorrectionExpansions++;
     }
-    codeGraphTelemetryState.byTaskId.set(taskId, entry);
+    if (entry.isolated) {
+      codeGraphTelemetryState.isolatedPublications++;
+    }
+
+    codeGraphTelemetryState.history.unshift(entry);
+    if (codeGraphTelemetryState.history.length > MAX_TELEMETRY_HISTORY) {
+      codeGraphTelemetryState.history.pop();
+    }
+
+    if (taskId && typeof taskId === 'string') {
+      if (codeGraphTelemetryState.byTaskId.size >= MAX_TASK_TELEMETRY_MAP && !codeGraphTelemetryState.byTaskId.has(taskId)) {
+        const oldestKey = codeGraphTelemetryState.byTaskId.keys().next().value;
+        if (oldestKey !== undefined) {
+          codeGraphTelemetryState.byTaskId.delete(oldestKey);
+        }
+      }
+      codeGraphTelemetryState.byTaskId.set(taskId, entry);
+    }
+  } catch (_) {
+    // Non-fatal telemetry: never abort main compilation or execution pipeline
   }
 }
 

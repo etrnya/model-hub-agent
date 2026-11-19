@@ -469,6 +469,99 @@ async function run() {
     assert.strictEqual(globalTelemetry.recentCompilations[0].taskId, sub.taskId);
   });
 
+  await test('[C4-T11] Cross-Module Invariant: Upstream SOURCE_MATCHED / UNVERIFIED is never escalated to VERIFIED downstream', async () => {
+    // Standard compilation path
+    const stdRes = await cascadingExecutor.compileCodeGraphContext(
+      {
+        objective: 'Check evidence trust preservation',
+        taskId: 'task-c4-t11-std',
+        action: 'BUG_FIX',
+        targetFiles: ['services/token_budget_guard.js'],
+        targetSymbols: ['TokenBudgetGuard']
+      },
+      { workspaceRoot, codeGraphAdapter: mockAdapter }
+    );
+    assert.ok(stdRes && typeof stdRes.contextText === 'string' && stdRes.contextText.length > 0, 'Expected compiled output');
+    assert.strictEqual(
+      /\b(status|validity|validationStatus|evidence_status)=["']VERIFIED["']/i.test(stdRes.contextText),
+      false,
+      'Standard compiler must NEVER escalate evidence status to VERIFIED'
+    );
+
+    // Isolated envelope path (explicitly passing upstream SOURCE_MATCHED)
+    const isoRes = await cascadingExecutor.compileCodeGraphContext(
+      {
+        objective: 'Check isolated evidence trust preservation',
+        taskId: 'task-c4-t11-iso',
+        tenantId: 'tenant-alpha',
+        taskType: 'FEATURE_DEV',
+        action: 'FEATURE',
+        targetFiles: ['services/token_budget_guard.js'],
+        targetSymbols: ['TokenBudgetGuard']
+      },
+      {
+        workspaceRoot,
+        codeGraphAdapter: mockAdapter,
+        isolatedEnvelope: true,
+        aggregateEvidenceStatus: 'SOURCE_MATCHED'
+      }
+    );
+    assert.ok(isoRes && isoRes.metadata && isoRes.metadata.admissionReceipt, 'Expected admissionReceipt');
+    assert.strictEqual(
+      isoRes.metadata.admissionReceipt.aggregateEvidenceStatus,
+      'SOURCE_MATCHED',
+      'AdmissionReceipt must preserve SOURCE_MATCHED and never escalate to VERIFIED'
+    );
+    assert.notStrictEqual(
+      isoRes.metadata.admissionReceipt.aggregateEvidenceStatus,
+      'VERIFIED',
+      'AdmissionReceipt aggregateEvidenceStatus must never be VERIFIED'
+    );
+    assert.strictEqual(
+      /\b(status|validity|validationStatus|evidence_status)=["']VERIFIED["']/i.test(isoRes.contextText),
+      false,
+      'Isolated envelope must NEVER escalate evidence status to VERIFIED'
+    );
+  });
+
+  await test('[C4-T12] Cross-Module Invariant: Telemetry faults never break main compilation or task execution', async () => {
+    const origGetTaskTelemetry = cascadingExecutor.getTaskTelemetry;
+    cascadingExecutor.getTaskTelemetry = () => {
+      throw new Error('Simulated telemetry store outage');
+    };
+
+    try {
+      const tm = new taskManagerModule.TaskManager({
+        dispatchFn: async (payload) => {
+          const compiled = await cascadingExecutor.compileCodeGraphContext(payload, {
+            workspaceRoot,
+            codeGraphAdapter: mockAdapter
+          });
+          return {
+            analysis: 'Main task succeeded despite telemetry fault',
+            result: compiled ? 'Compiled' : 'None'
+          };
+        }
+      });
+
+      const sub = tm.submitTask({
+        role: 'code_reviewer',
+        objective: 'Verify non-fatal telemetry isolation',
+        action: 'BUG_FIX',
+        targetFiles: ['services/token_budget_guard.js'],
+        targetSymbols: ['TokenBudgetGuard']
+      });
+
+      await new Promise(r => setTimeout(r, 40));
+
+      const taskDetail = tm.getTask(sub.taskId);
+      assert.strictEqual(taskDetail.status, 'COMPLETED', 'Task must complete even when telemetry lookup throws');
+      assert.strictEqual(taskDetail.data.result, 'Compiled', 'Main CodeGraph compilation result must remain intact');
+    } finally {
+      cascadingExecutor.getTaskTelemetry = origGetTaskTelemetry;
+    }
+  });
+
   console.log(`\n======================================================`);
   console.log(`Phase 1-C4 Pipeline Wiring Complete: ${passed} Passed, ${failed} Failed`);
   console.log(`======================================================\n`);

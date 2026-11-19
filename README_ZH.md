@@ -1,21 +1,27 @@
-# Antigravity Agent OS (AI 代理作業系統內核)
+# Antigravity Agent OS — 證據優先的 AI Agent 基礎設施
 
 [English](README.md) | [繁體中文](README_ZH.md)
 
-**Antigravity Agent OS** 是一個工業級、具備高韌性的 AI 調度內核。它不僅僅是一個模型切換器，更是一個能主動防禦外部 API 不穩定性、優化上下文空間並嚴格控制成本的「代理作業系統」。
+[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+[![Version](https://img.shields.io/badge/version-1.5.0-brightgreen.svg)](package.json)
+
+**Antigravity Agent OS** 是一套**證據優先的 AI Agent 基礎設施 (Evidence-First Agent Infrastructure)**——專注於協助 AI Agent 在嚴格的 Token 預算內，取得來源可信、可追溯且經隔離驗證的上下文證據，並結合多模型級聯容災與冪等控制。
 
 ## 🌟 核心價值
 
-在開發 LLM 應用時，開發者常遇到：模型幻覺導致 JSON 報錯、上下文太長導致 Token 炸裂、以及高階模型費用昂貴。本專案透過以下技術解決這些問題：
+### 證據優先上下文基礎設施 (P1-C1 ~ P1-C4)
+-   **AST 呼叫圖與衝擊分析 (`CallGraphEngine`)**：在模型調度前執行雙向 Caller/Callee 拓撲展開與影響範圍評估（`assessedBlastRadius`、`analysisCompleteness`）。
+-   **角色感知規劃與預算守衛 (`RoleAwareContextPlanner` / `TokenBudgetGuard`)**：依角色與任務類型動態規劃檢索深度，強制執行 3,000 Token 硬上限與三模式估算契約。
+-   **誠實證據准入 (`EvidenceAdmissionEngine`)**：單次讀取檔案快照、UAX #31 `\p{ID_Continue}` 識別碼邊界比對，嚴格區分 `SOURCE_MATCHED` 與 `CONTENT_VERIFIED`（絕不錯誤升級為 `VERIFIED`）。
+-   **確定性上下文編譯 (`ContextCompiler`)**：5 層確定性排序、XML CDATA 隔離封裝、2,000ms DLP 看門狗與裁剪後二次計量同源不變性。
+-   **隔離邊界與 90 格發布閘門 (`IsolationBoundary`)**：13 欄位 TLV 租戶隔離、`AdmissionReceipt`、`SourceProvenanceToken` 與內部權威 90 格政策矩陣（`DRIFT_DETECTED` 觸發 Fail-Closed 阻斷）。
+-   **二階段動態自癒 (`Self-Correction`)**：當 `VerificationGate` 判定內容驗證失敗時，自動將 CodeGraph 遍歷深度擴展至 `depth=3` 重新編譯上下文。
 
--   **安全護欄 (Guardrail)**：主動攔截提示詞注入攻擊 (Prompt Injection) 並自動對敏感數據（如 API Keys）進行脫敏。
--   **健康感知路由 (Router)**：自動偵測各供應商延遲與狀態，壞掉的模型自動避開。
--   **級聯故障轉場 (Cascading Executor)**：首選模型失敗時，自動切換至備援模型繼續執行，確保任務不中斷。
--   **核心錨點壓縮 (Context Compressor)**：獨創「關鍵洞察錨定」技術，壓縮歷史對話的同時，絕對保護「任務目標」與「硬約束」。
--   **非對稱雙重驗證 (Verification Gate)**：用廉價模型 (如 Llama 8B) 來審計高階模型 (如 Claude 3.5) 的輸出，實現低成本的品質監控。
--   **供應商配額監控 (Quota Monitor)**：即時統計各供應商 (NVIDIA, Gemini, DeepSeek) 的 Token 消耗，並在接近免費額度上限時發出預警。
--   **靜默修正 2.0 (SilentFix)**：具備結構化修復能力，自動修補被截斷的 JSON 或非法換行符。
--   **樂觀並行狀態 (Global State)**：採用版本號控制 (OCC)，確保多個 Agent 協作時數據一致。
+### 高韌性調度與觀測治理 (Core + Phase 2)
+-   **API 冪等防重 (`x-idempotency-key`)**：支援正規化 Payload SHA-256 指紋比對，相同請求自動去重，同 Key 異參嚴格回傳 `409 IDEMPOTENCY_KEY_CONFLICT`。
+-   **非致命編譯遙測**：有界環狀遙測帳本掛載至 `GET /api/tasks/:id`、`GET /api/stats` 與控制台 (`observability/dashboard.html`)，遙測異常絕不中斷主流程。
+-   **安全護欄與級聯容災**：Prompt Injection 攔截、DLP 脫敏、Heartbeat 路由與 <200ms 429 容災切換（AI Studio → Vertex AI）。
+-   **非對稱雙重驗證與靜默修正 2.0**：低成本審計模型交叉驗證搭配結構化 JSON 修復與 OCC 樂觀鎖 `GlobalState`。
 
 ## 🧠 設計哲學：為什麼需要 Agent OS？
 
@@ -27,23 +33,28 @@
 3.  **解決「模型選擇焦慮」**：當您不確定該用哪個模型最划算時，讓 Router 根據當前 API 健康度與任務難度自動為您決策。
 
 ## 📖 專案文件
+- [開發指南 (P1-C 管線與專案不變量)](DEVELOPMENT_GUIDE.md)
+- [領域術語字典 (GLOSSARY)](GLOSSARY.md)
 - [詳細使用手冊](USAGE_GUIDE_ZH.md)
 - [架構設計說明 (RPD)](RPD.md)
 - [API 配置指南](API_SETUP_GUIDE.md)
 
-## 📐 系統架構
+## 📐 系統架構 (P1-C1 ~ P1-C4 & Phase 2)
 
 ```mermaid
 graph TD
-    A[任務 Payload] --> B[全域狀態]
-    B --> C[智能路由]
-    C -->|選擇最優模型| D[基礎客戶端]
-    D --> E[上下文壓縮器]
-    E -->|錨定關鍵上下文| F[模型 API]
-    F -->|原始響應| G[架構校驗器]
-    G -->|靜默修正 2.0| H[驗證閘門]
-    H -->|非對稱審計| I[自我修正迴路]
-    I -->|最終結果| J[全域狀態更新]
+    A["任務 / 角色 / x-idempotency-key"] --> B["TaskManager & RoleManager"]
+    B --> C["CallGraphEngine (AST 與衝擊分析)"]
+    C --> D["RoleAwareContextPlanner & TokenBudgetGuard"]
+    D --> E["EvidenceAdmissionEngine (SOURCE_MATCHED / CONTENT_VERIFIED)"]
+    E --> F["ContextCompiler (5 層排序, XML CDATA, DLP)"]
+    F --> G["IsolationBoundary (90 格矩陣與發布閘門)"]
+    G -->|ALLOW / DEGRADED| H["CascadingExecutor & Router"]
+    G -->|DRIFT_DETECTED / ABORT| X["Fail-Closed 阻斷"]
+    H --> I["VerificationGate & SilentFix 2.0"]
+    I -->|VERIFICATION_CONTENT_FAIL| C2["自我修正 (擴展遍歷深度 Depth=3)"]
+    C2 --> F
+    I -->|驗證通過| J["GlobalState (OCC) & 非致命遙測"]
 ```
 
 ## 🚀 快速開始
@@ -184,6 +195,18 @@ Agent OS 內置了多種工業級的 Token 優化機制，以最小化 API 調�
 8. **第八階段：Qdrant 向量記憶層對接 (100% LLM 繞過)**（2026-06-28）
    - **起因**：在重複執行相同任務或偵錯修復時，雲端 LLM 重複推理會產生無謂的計費開銷與較高的生成延遲。
    - **解法**：開發 [MemoryManager](file:///c:/Users/etrny/.gemini/antigravity/scratch/model-hub-agent/infrastructure/adapters/memory_manager.js)，整合 Vertex AI `text-embedding-004` 提取任務特徵向量，並在 Docker Qdrant 中進行語意相似度檢索。相似度 >= 95% 時直接返回歷史成功的 JSON 結果，達成 0 Token 消耗與 sub-second 級超低延遲。
+
+9. **第九階段：證據優先上下文基礎設施 (P1-C1 ~ P1-C4)**（2026-11-13 ~ 2026-11-17）
+   - **起因**：原始檢索缺乏來源血統驗證、租戶隔離與嚴格 Token 預算控制，容易導致上下文漂移或未驗證證據誤升級。
+   - **解法**：於 [cascading_executor.js](file:///c:/Users/etrny/.gemini/antigravity/scratch/model-hub-agent/services/cascading_executor.js) 串接 `CallGraphEngine` → `RoleAwareContextPlanner` → `EvidenceAdmissionEngine` → `ContextCompiler` → `IsolationBoundary`（90 格矩陣），支援二階段深度擴展（`depth=3`）與 20/20 離線測試驗證。
+
+10. **第十階段：觀測遙測、冪等防重與 Apache 2.0 版本治理 (v1.5.0)**（2026-11-17 ~ 2026-11-19）
+    - **起因**：多階段重試與併發 API 請求需要冪等性保護、編譯遙測與統一的版本授權治理。
+    - **解法**：實作 `x-idempotency-key` SHA-256 衝突攔截 (`409`)、非致命 CodeGraph 遙測、跨模組不變量測試 (`C4-T11` / `C4-T12`)、Apache 2.0 授權並將 `package.json` 版本 (`1.5.0`) 與 Git Tag 對齊。
+
+## 🏷️ 版本治理策略
+- **`package.json` (`1.5.0`)** 採用語意化版本控制（SemVer：`MAJOR.MINOR.PATCH`），與 Git Tag（`v1.3.0-phase-3` → `v1.4.0-phase-1-consolidated` → `v1.5.0`）保持同步。
+- **離線測試基線**：所有版本發布前必須通過 `npm test`（20/20 離線測試套件，Exit Code 0）及 `tests/run_tests.js` 雙向清單檢查。
 
 ## 📜 授權協議
 本專案採用 [Apache License 2.0](LICENSE) 授權。

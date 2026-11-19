@@ -1,7 +1,7 @@
 {
   "name": "model-hub-agent",
-  "version": "1.0.0",
-  "description": "Antigravity AI Kernel - Industrial-grade Agent OS for resilient multi-model orchestration.",
+  "version": "1.5.0",
+  "description": "Antigravity Agent OS - Evidence-First Agent Infrastructure for verifiable context compilation, fail-closed isolation, and resilient multi-model orchestration.",
   "main": "main.js",
   "scripts": {
     "start": "node main.js",

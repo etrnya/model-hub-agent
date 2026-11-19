@@ -1,23 +1,27 @@
-# Antigravity Agent OS (AI Agent Kernel)
+# Antigravity Agent OS — Evidence-First Agent Infrastructure
 
 [English](README.md) | [繁體中文](README_ZH.md)
 
-**Antigravity Agent OS** is an industrial-grade, highly resilient AI orchestration kernel.
-
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+[![Version](https://img.shields.io/badge/version-1.5.0-brightgreen.svg)](package.json)
 
-**Antigravity Agent OS** is an industrial-grade, resilient AI orchestration kernel designed to solve common LLM application challenges: model unreliability, context overflow, and uncontrolled API costs. It transforms a collection of fragile API calls into a robust, self-healing "Operating System" for AI agents.
+**Antigravity Agent OS** is an **Evidence-First AI Agent Infrastructure** — an engineering substrate that helps AI agents manage verifiable context, enforce strict evidence trust boundaries, isolate tenant/snapshot risks, and orchestrate resilient multi-model execution within hard token budgets.
 
 ## 🚀 Key Features
 
--   **AI Guardrail**: Active scanning for prompt injection attempts and automated PII/sensitive data redaction.
--   **Health-Aware Routing**: Real-time latency and health monitoring (Heartbeat) to route tasks to the most optimal model endpoint.
--   **Cascading Failover**: Automatically retries tasks with backup models if the primary one fails, ensuring mission completion.
--   **Key-Insight Anchoring**: A smart context compressor that protects mission-critical instructions (Objectives & Constraints) while summarizing conversation history.
--   **Multi-Provider Quota Monitor**: Real-time tracking of token usage across providers (NVIDIA, Google, DeepSeek) with automated quota-limit alerts.
--   **Asymmetric Verification**: High-tier model outputs are audited by cost-effective base-tier models, ensuring quality without breaking the bank.
--   **SilentFix 2.0**: A structural self-healing engine that automatically repairs malformed JSON, truncated responses, and unescaped characters.
--   **Optimistic State Management**: Version-controlled global state (OCC) for consistent multi-agent collaboration.
+### Evidence-First Context Infrastructure (P1-C1 ~ P1-C4)
+-   **CodeGraph AST & Blast Radius (`CallGraphEngine`)**: Bidirectional Caller/Callee topology traversal and impact assessment (`assessedBlastRadius`, `analysisCompleteness`) before model dispatch.
+-   **Role-Aware Planning & Hard Token Cap (`RoleAwareContextPlanner` / `TokenBudgetGuard`)**: Role-driven retrieval policies with a strict 3,000-token envelope ceiling and three-mode estimation contract.
+-   **Honest Evidence Admission (`EvidenceAdmissionEngine`)**: Single-read file snapshot verification, UAX #31 `\p{ID_Continue}` boundary matching, and strict non-escalation of trust states (`SOURCE_MATCHED` / `CONTENT_VERIFIED` — never falsely promoted to `VERIFIED`).
+-   **Deterministic Context Compiler (`ContextCompiler`)**: 5-tier deterministic sorting, XML CDATA isolation, 2,000ms DLP watchdog, and re-serialized post-pruning token invariance.
+-   **Isolation & 90-Cell Publication Gate (`IsolationBoundary`)**: 13-field TLV tenant isolation, `AdmissionReceipt`, `SourceProvenanceToken`, and internal authoritative 90-cell policy matrix with Fail-Closed (`DRIFT_DETECTED` / `ABORT`) protection.
+-   **Two-Phase Self-Correction**: Dynamically expands CodeGraph traversal depth (`depth = 3`) upon `VERIFICATION_CONTENT_FAIL` to recover missing caller/callee boundaries.
+
+### Resilient Orchestration & Observability (Core + Phase 2)
+-   **Idempotent Task Submission (`x-idempotency-key`)**: Normalized SHA-256 payload fingerprinting deduplicates retries and rejects conflicting payloads with `409 IDEMPOTENCY_KEY_CONFLICT`.
+-   **Non-Fatal Compilation Telemetry**: Bounded telemetry ledger (`getCodeGraphTelemetry`, `getTaskTelemetry`) wired to `GET /api/tasks/:id`, `GET /api/stats`, and `observability/dashboard.html`.
+-   **AI Guardrail & Health-Aware Cascading Failover**: Prompt injection defense, DLP redaction, heartbeat routing, and <200ms failover (e.g., AI Studio `429` → Vertex AI).
+-   **Asymmetric Verification & SilentFix 2.0**: Dual-verification gate with structural JSON repair and OCC `GlobalState`.
 
 ## 🧠 Design Philosophy: Why Agent OS?
 
@@ -29,23 +33,28 @@ In the AI-native era, developers often struggle between "High Intelligence but E
 3.  **Automated Model Orchestration**: Let the "Router" decide the best model based on real-time API health and task complexity, so you don't have to.
 
 ## 📖 Documentation
+- [Development Guide (P1-C Pipeline & Invariants)](DEVELOPMENT_GUIDE.md)
+- [Domain Glossary](GLOSSARY.md)
 - [Detailed Usage Guide](USAGE_GUIDE.md)
 - [Architecture Details (RPD)](RPD.md)
 - [API Setup Guide](API_SETUP_GUIDE.md)
 
-## 🏗️ Architecture
+## 🏗️ Architecture (P1-C1 ~ P1-C4 & Phase 2)
 
 ```mermaid
 graph TD
-    A[Task Payload] --> B[Global State]
-    B --> C[Router]
-    C -->|Select Best Model| D[Base Client]
-    D --> E[Context Compressor]
-    E -->|Anchored Context| F[Model API]
-    F -->|Raw Response| G[Schema Validator]
-    G -->|Silent Fix 2.0| H[Verification Gate]
-    H -->|Asymmetric Audit| I[Self-Correction Loop]
-    I -->|Final Result| J[Global State Update]
+    A["Task / Role / x-idempotency-key"] --> B["TaskManager & RoleManager"]
+    B --> C["CallGraphEngine (AST & Blast Radius)"]
+    C --> D["RoleAwareContextPlanner & TokenBudgetGuard"]
+    D --> E["EvidenceAdmissionEngine (SOURCE_MATCHED / CONTENT_VERIFIED)"]
+    E --> F["ContextCompiler (5-Tier Sort, XML CDATA, DLP)"]
+    F --> G["IsolationBoundary (90-Cell Matrix & Publication Gate)"]
+    G -->|ALLOW / DEGRADED| H["CascadingExecutor & Router"]
+    G -->|DRIFT_DETECTED / ABORT| X["Fail-Closed Reject"]
+    H --> I["VerificationGate & SilentFix 2.0"]
+    I -->|VERIFICATION_CONTENT_FAIL| C2["Self-Correction (Expand Depth=3)"]
+    C2 --> F
+    I -->|Verified| J["GlobalState (OCC) & Non-Fatal Telemetry"]
 ```
 
 ## 🛠️ Quick Start
@@ -191,6 +200,18 @@ Agent OS has undergone several critical architectural upgrades, each driven by r
 8. **Phase 8: Qdrant Vector Memory Integration (100% LLM Bypass)** (2026-06-28)
    - **Trigger**: Running identical or highly similar code-fixing/debugging tasks repeatedly consumed redundant cloud API costs and caused execution latencies.
    - **Solution**: Developed [MemoryManager](file:///c:/Users/etrny/.gemini/antigravity/scratch/model-hub-agent/infrastructure/adapters/memory_manager.js) using Vertex AI `text-embedding-004` to vectorize objectives, performing Cosine similarity lookups in Docker Qdrant. Hit rates >= 95% bypass cloud LLM inference entirely, achieving 0 token consumption and sub-second execution speeds.
+
+9. **Phase 9: Evidence-First Context Infrastructure (P1-C1 ~ P1-C4)** (2026-11-13 ~ 2026-11-17)
+   - **Trigger**: Raw LLM retrieval lacked provenance verification, tenant isolation, and strict token budget enforcement, risking context drift and unverified trust escalation.
+   - **Solution**: Built the `CallGraphEngine` → `RoleAwareContextPlanner` → `EvidenceAdmissionEngine` → `ContextCompiler` → `IsolationBoundary` (90-cell matrix) pipeline in [cascading_executor.js](file:///c:/Users/etrny/.gemini/antigravity/scratch/model-hub-agent/services/cascading_executor.js), with two-phase self-correction (`depth=3`) and 20/20 offline test suites.
+
+10. **Phase 10: Observability Telemetry, Idempotency & Apache 2.0 Governance (v1.5.0)** (2026-11-17 ~ 2026-11-19)
+    - **Trigger**: Multi-stage retries and concurrent API submissions required idempotency enforcement, compilation telemetry, and unified versioning/licensing.
+    - **Solution**: Added `x-idempotency-key` SHA-256 conflict detection (`409`), non-fatal CodeGraph telemetry across API/Dashboard, cross-module invariant assertions (`C4-T11` / `C4-T12`), Apache 2.0 licensing, and aligned `package.json` SemVer (`1.5.0`) with Git tags.
+
+## 🏷️ Versioning Policy
+- **`package.json` (`1.5.0`)** follows Semantic Versioning (`MAJOR.MINOR.PATCH`) and serves as the canonical release version, aligned with Git tags (`v1.3.0-phase-3` → `v1.4.0-phase-1-consolidated` → `v1.5.0`).
+- **Offline Test Baseline**: All releases must pass `npm test` (20/20 offline suites, Exit Code 0) with `tests/run_tests.js` bidirectional manifest integrity.
 
 ## 📄 License
 This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENSE) file for details.
