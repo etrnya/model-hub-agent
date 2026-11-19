@@ -198,15 +198,15 @@ Agent OS 內置了多種工業級的 Token 優化機制，以最小化 API 調�
 
 9. **第九階段：證據優先上下文基礎設施 (P1-C1 ~ P1-C4)**（2026-11-13 ~ 2026-11-17）
    - **起因**：原始檢索缺乏來源血統驗證、租戶隔離與嚴格 Token 預算控制，容易導致上下文漂移或未驗證證據誤升級。
-   - **解法**：於 [cascading_executor.js](file:///c:/Users/etrny/.gemini/antigravity/scratch/model-hub-agent/services/cascading_executor.js) 串接 `CallGraphEngine` → `RoleAwareContextPlanner` → `EvidenceAdmissionEngine` → `ContextCompiler` → `IsolationBoundary`（90 格矩陣），支援二階段深度擴展（`depth=3`）與 20/20 離線測試驗證。
+   - **解法**：於 [cascading_executor.js](file:///c:/Users/etrny/.gemini/antigravity/scratch/model-hub-agent/services/cascading_executor.js) 串接 `CallGraphEngine` → `RoleAwareContextPlanner` → `EvidenceAdmissionEngine` → `ContextCompiler` → `IsolationBoundary`（90 格矩陣），支援二階段深度擴展（`depth=3`）與完整離線測試驗證。
 
 10. **第十階段：觀測遙測、冪等防重與 Apache 2.0 版本治理 (v1.5.0)**（2026-11-17 ~ 2026-11-19）
     - **起因**：多階段重試與併發 API 請求需要冪等性保護、編譯遙測與統一的版本授權治理。
-    - **解法**：實作 `x-idempotency-key` SHA-256 衝突攔截 (`409`)、非致命 CodeGraph 遙測、跨模組不變量測試 (`C4-T11` / `C4-T12`)、Apache 2.0 授權並將 `package.json` 版本 (`1.5.0`) 與 Git Tag 對齊。
+    - **解法**：實作 `x-idempotency-key` SHA-256 衝突攔截 (`409`)、非致命 CodeGraph 遙測、跨模組不變量測試 (`C4-T11` / `C4-T12`)、安全故障注入套件 (`test_remediation_fault_injection.js`)、Apache 2.0 授權並將 `package.json` 版本 (`1.5.0`) 與 Git Tag 對齊。
 
 ## 🏷️ 版本治理策略
 - **`package.json` (`1.5.0`)** 採用語意化版本控制（SemVer：`MAJOR.MINOR.PATCH`），與 Git Tag（`v1.3.0-phase-3` → `v1.4.0-phase-1-consolidated` → `v1.5.0`）保持同步。
-- **離線測試基線**：所有版本發布前必須通過 `npm test`（20/20 離線測試套件，Exit Code 0）及 `tests/run_tests.js` 雙向清單檢查。
+- **離線測試基線**：所有版本發布前必須通過 `npm test`（所有登記的離線測試套件，目前為 21/21，Exit Code 0）及 `tests/run_tests.js` 雙向清單檢查。
 
 ## 📜 授權協議
 本專案採用 [Apache License 2.0](LICENSE) 授權。

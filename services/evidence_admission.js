@@ -9,7 +9,7 @@
 const path = require('path');
 const fs = require('fs').promises;
 const crypto = require('crypto');
-const { AdmissionReceiptIssuer, readImmutableFileSnapshot } = require('./isolation_boundary');
+const { AdmissionReceiptIssuer, readImmutableFileSnapshot, sealFdVerifiedEvidence } = require('./isolation_boundary');
 
 /**
  * Escapes characters for regular expressions.
@@ -214,12 +214,13 @@ class EvidenceAdmissionEngine {
       let rawBuffer = null;
       let fileSha256 = '';
       let statSnapshot = null;
+      let snapshotObj = null;
       let fdSnapshotVerified = false;
       try {
-        const snapshot = this.snapshotReader(realPath);
-        rawBuffer = snapshot.getBufferCopy();
-        fileSha256 = snapshot.sha256;
-        statSnapshot = snapshot.statSnapshot || null;
+        snapshotObj = this.snapshotReader(realPath);
+        rawBuffer = snapshotObj.getBufferCopy();
+        fileSha256 = snapshotObj.sha256;
+        statSnapshot = snapshotObj.statSnapshot || null;
         fdSnapshotVerified = true;
       } catch (readErr) {
         summary.unverifiedCount++;
@@ -362,7 +363,7 @@ class EvidenceAdmissionEngine {
       else if (mappedStatus === 'STALE') summary.staleCount++;
       else summary.unverifiedCount++;
 
-      admittedEvidence.push({
+      const admittedItem = {
         sourceEvidenceId: evidenceId,
         symbol,
         filePath,
@@ -383,9 +384,14 @@ class EvidenceAdmissionEngine {
         warning,
         sourceFileSha256: fileSha256,
         sourceSnippetSha256: snippetSha256,
-        fdSnapshotVerified,
+        fdSnapshotVerified: false,
         statSnapshot
-      });
+      };
+      // Unforgeable WeakSet brand: only succeeds if snapshotObj was genuinely issued by readImmutableFileSnapshot()
+      if (fdSnapshotVerified && sealFdVerifiedEvidence(admittedItem, snapshotObj)) {
+        admittedItem.fdSnapshotVerified = true;
+      }
+      admittedEvidence.push(admittedItem);
     }
 
     return {

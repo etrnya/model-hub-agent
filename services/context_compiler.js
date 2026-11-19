@@ -13,7 +13,8 @@ const {
   ProvenanceTokenIssuer,
   decidePublication,
   resolveDiagnosticConfidence,
-  mapReceiptToMatrixInputs
+  mapReceiptToMatrixInputs,
+  isFdVerifiedEvidenceItem
 } = require('./isolation_boundary');
 
 class ContextCompilationError extends Error {
@@ -559,11 +560,25 @@ class ContextCompiler {
       throw new ContextCompilationError(budgetResult.errorCode || 'TOKEN_BUDGET_EXCEEDED', (budgetResult.notices && budgetResult.notices[0]) || 'Budget exceeded');
     }
 
+    // Preserve unforgeable WeakSet-branded fdProofToken across TokenBudgetGuard's structuredClone boundary
+    const fdProofByEvidenceId = new Map();
+    for (const orig of (admissionResult.admittedEvidence || [])) {
+      if (orig && orig.sourceEvidenceId && orig.fdProofToken) {
+        fdProofByEvidenceId.set(orig.sourceEvidenceId, {
+          token: orig.fdProofToken,
+          sha256: orig.sourceFileSha256
+        });
+      }
+    }
+
     const compiledItems = budgetResult.retainedItems.map(item => {
       const finalSnippet = item.snippet !== undefined ? item.snippet : (item.sanitizedSnippet || item.rawSnippet || '');
       const emittedHash = crypto.createHash('sha256').update(finalSnippet, 'utf8').digest('hex');
+      const proofEntry = fdProofByEvidenceId.get(item.sourceEvidenceId);
+      const preservedToken = (proofEntry && proofEntry.sha256 === item.sourceFileSha256) ? proofEntry.token : undefined;
       return {
         ...item,
+        fdProofToken: preservedToken,
         finalSnippet,
         emittedContentSha256: emittedHash
       };
@@ -726,8 +741,9 @@ class ContextCompiler {
       envelopeSha256: contextTextHash
     });
 
-    const allItemsFdVerified = compiledItems.length > 0 && compiledItems.every(i => i && i.fdSnapshotVerified === true);
-    const derivedIsolationTier = (options.fdSnapshotVerified === true || allItemsFdVerified)
+    // Unforgeable WeakSet brand check: NEVER trust caller-supplied options.fdSnapshotVerified
+    const allItemsFdVerified = compiledItems.length > 0 && compiledItems.every(i => isFdVerifiedEvidenceItem(i));
+    const derivedIsolationTier = allItemsFdVerified
       ? 'TIER_4_VERIFIED_FD'
       : 'TIER_2_JS_ISOLATED';
 

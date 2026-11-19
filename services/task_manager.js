@@ -166,14 +166,12 @@ class TaskManager {
     let payloadHash = null;
     if (idempotencyKey) {
       const canonicalize = (val) => {
-        if (val === undefined) return '__UNDEFINED__';
-        if (val === null || typeof val !== 'object') return val;
-        if (Array.isArray(val)) return val.map(canonicalize);
-        const sorted = {};
-        for (const k of Object.keys(val).sort()) {
-          sorted[k] = canonicalize(val[k]);
-        }
-        return sorted;
+        if (val === undefined) return ['U'];
+        if (val === null) return ['N'];
+        if (typeof val !== 'object') return ['P', typeof val, val];
+        if (Array.isArray(val)) return ['A', val.map(canonicalize)];
+        const entries = Object.keys(val).sort().map(k => [k, canonicalize(val[k])]);
+        return ['O', entries];
       };
       const canonicalPayload = canonicalize({
         role: selectedRoleId,

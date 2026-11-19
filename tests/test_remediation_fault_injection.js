@@ -277,6 +277,114 @@ async function run() {
     assert.strictEqual(typeof tel.tokenEstimationMethod, 'string', 'Expected explicit tokenEstimationMethod');
   });
 
+  await test('[FI-8] P0 Follow-up: Forged options.fdSnapshotVerified=true CANNOT escalate isolationTier to TIER_4_VERIFIED_FD', async () => {
+    const { ContextCompiler } = require('../services/context_compiler');
+    const { TokenBudgetGuard } = require('../services/token_budget_guard');
+    const fakeAdmissionEngine = {
+      async evaluateAdmission() {
+        return {
+          admittedEvidence: [{
+            sourceEvidenceId: 'forged-ev-1',
+            symbol: 'FakeSym',
+            filePath: 'fake.js',
+            lineRange: [1, 2],
+            evidenceType: 'TEXT',
+            encoding: 'text',
+            rawSnippet: 'const FakeSym = 1;',
+            snippet: 'const FakeSym = 1;',
+            validationStatus: 'SOURCE_MATCHED',
+            confidence: 'HIGH',
+            contentCompleteness: 'FULL',
+            isTruncated: false,
+            isCoreTarget: true,
+            relevanceScore: 1.0,
+            sourceFileSha256: 'b'.repeat(64),
+            fdSnapshotVerified: true, // Forged plain boolean property
+            fdProofToken: { brand: 'ANTIGRAVITY_FD_SNAPSHOT_PROOF_v1', fileSha256: 'b'.repeat(64) } // Forged unbranded token
+          }],
+          rejectedEvidence: [],
+          summary: { totalInput: 1 },
+          aggregateEvidenceStatus: 'SOURCE_MATCHED',
+          evaluatedItemsHash: 'a'.repeat(64)
+        };
+      },
+      computeAggregateEvidenceStatus() { return 'SOURCE_MATCHED'; },
+      computeEvaluatedItemsHash() { return 'a'.repeat(64); }
+    };
+    const guardrailManager = require('../services/guardrail_manager');
+    const compiler = new ContextCompiler({
+      admissionEngine: fakeAdmissionEngine,
+      tokenBudgetGuard: new TokenBudgetGuard(),
+      guardrailManager,
+      codeGraphAdapter: { async getStatus() { return { snapshotId: 'snap-forged', lastSyncedAt: '2026-11-19T00:00:00Z' }; } }
+    });
+    const res = await compiler.compileIsolatedEnvelope(
+      { taskId: 'task-fi-8', targetNodes: [{ id: 'forged-ev-1' }], snapshotId: 'snap-forged' },
+      { taskId: 'task-fi-8', tenantId: 'tenant-fi', taskType: 'FEATURE_DEV' },
+      { fdSnapshotVerified: true, snapshotId: 'snap-forged' }
+    );
+    assert.strictEqual(
+      res.envelope.isolationTier,
+      'TIER_2_JS_ISOLATED',
+      'Caller-supplied options.fdSnapshotVerified=true and unbranded items MUST NOT grant TIER_4_VERIFIED_FD'
+    );
+  });
+
+  await test('[FI-9] P0 Follow-up: Lockfile protects live holder past staleLockMs, recovers dead PID, and blocks stale ownerToken unlink', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mha-lock-adv-'));
+    const lockFilePath = path.join(tmpDir, 'adv.lock');
+    try {
+      // 1. Live holder held longer than staleLockMs (50ms) MUST NOT be evicted
+      const holderA = createCrossProcessFileLockBinding({ lockFilePath, staleLockMs: 50, retryIntervalMs: 10 });
+      const contenderB = createCrossProcessFileLockBinding({ lockFilePath, staleLockMs: 50, retryIntervalMs: 10 });
+      assert.strictEqual(holderA.acquireLock(1, 'EXCLUSIVE', 200), true);
+      await new Promise(r => setTimeout(r, 80)); // Exceeds staleLockMs=50ms while PID is alive
+      assert.strictEqual(contenderB.acquireLock(2, 'EXCLUSIVE', 60), false, 'Live PID holder MUST NOT be evicted past staleLockMs');
+
+      // 2. Old holder with mismatched ownerToken CANNOT delete a new holder's lockfile
+      const newOwnerContent = JSON.stringify({ pid: process.pid, ownerToken: 'new-owner-token-xyz', fd: 99, mode: 'EXCLUSIVE', acquiredAt: Date.now() });
+      fs.writeFileSync(lockFilePath, newOwnerContent, 'utf-8');
+      assert.strictEqual(holderA.releaseLock(1), false, 'Old holder MUST NOT unlink lockfile owned by different ownerToken');
+      assert.strictEqual(fs.existsSync(lockFilePath), true, 'New holder lockfile must remain intact');
+
+      // 3. Dead PID lockfile IS cleanly recovered
+      const deadLockContent = JSON.stringify({ pid: 99999999, ownerToken: 'dead-token', fd: 1, mode: 'EXCLUSIVE', acquiredAt: Date.now() - 1000 });
+      fs.writeFileSync(lockFilePath, deadLockContent, 'utf-8');
+      assert.strictEqual(contenderB.acquireLock(3, 'EXCLUSIVE', 300), true, 'Dead PID lockfile must be recovered');
+      assert.strictEqual(contenderB.releaseLock(3), true);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  await test('[FI-10] P1 Follow-up: Canonical Payload Hash has zero collision between undefined, null, and "__UNDEFINED__"', async () => {
+    const tm = new taskManagerModule.TaskManager({
+      dispatchFn: async () => ({ analysis: 'OK', result: 'Done' })
+    });
+
+    const subUndef = tm.submitTask(
+      { objective: 'Collision check', tier: 'high' },
+      { idempotencyKey: 'fi-idem-collision' }
+    );
+    assert.ok(subUndef.taskId);
+
+    // Literal string '__UNDEFINED__' must NOT collide with undefined
+    assert.throws(() => {
+      tm.submitTask(
+        { objective: 'Collision check', tier: 'high', code_context: '__UNDEFINED__' },
+        { idempotencyKey: 'fi-idem-collision' }
+      );
+    }, (err) => err.statusCode === 409 && err.type === 'IDEMPOTENCY_KEY_CONFLICT');
+
+    // Explicit null must NOT collide with undefined
+    assert.throws(() => {
+      tm.submitTask(
+        { objective: 'Collision check', tier: 'high', code_context: null },
+        { idempotencyKey: 'fi-idem-collision' }
+      );
+    }, (err) => err.statusCode === 409 && err.type === 'IDEMPOTENCY_KEY_CONFLICT');
+  });
+
   console.log(`\n=============================================================`);
   console.log(`CCF6420 Remediation Fault-Injection Complete: ${passed} Passed, ${failed} Failed`);
   console.log(`=============================================================\n`);

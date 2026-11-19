@@ -522,9 +522,11 @@ function createDefaultLockBinding() {
 }
 
 /**
- * Real cross-process atomic lockfile binding using O_CREAT | O_EXCL ('wx').
- * Provides genuine mutual exclusion across independent OS processes with stale-PID crash recovery.
- * HONESTY NOTICE: Implements CROSS_PROCESS_ATOMIC_LOCKFILE (exclusive mutex), not native OS LockFileEx/flock.
+ * Real cross-process atomic lockfile binding using temp-file + fs.linkSync (atomic O_EXCL link).
+ * - Eliminates half-written lockfiles on mid-write crash (payload is fsynced before linkSync).
+ * - Protects live holders: NEVER evicts a lock while holder PID is alive, even beyond staleLockMs.
+ * - Enforces ownerToken verification on releaseLock so a stale/old holder cannot delete a new holder's lock.
+ * - Serializes dead-PID recovery via an atomic .recover mutex file so only one contender recovers.
  */
 function createCrossProcessFileLockBinding(options = {}) {
   const lockFilePath = options.lockFilePath;
@@ -533,8 +535,9 @@ function createCrossProcessFileLockBinding(options = {}) {
   }
   const staleLockMs = Number.isInteger(options.staleLockMs) && options.staleLockMs > 0 ? options.staleLockMs : 15000;
   const retryIntervalMs = Number.isInteger(options.retryIntervalMs) && options.retryIntervalMs > 0 ? options.retryIntervalMs : 15;
+  const recoverLockPath = `${lockFilePath}.recover`;
   const operationLog = [];
-  const heldFds = new Map();
+  const heldFds = new Map(); // fd -> { mode, ownerToken }
 
   function isPidAlive(pid) {
     if (!Number.isInteger(pid) || pid <= 0) return false;
@@ -547,18 +550,50 @@ function createCrossProcessFileLockBinding(options = {}) {
   }
 
   function tryRecoverStaleLock() {
+    let recoverFd = null;
     try {
-      const raw = fs.readFileSync(lockFilePath, 'utf-8');
-      const parsed = JSON.parse(raw);
-      const ageMs = Date.now() - (parsed.acquiredAt || 0);
-      if ((parsed.pid && !isPidAlive(parsed.pid)) || ageMs > staleLockMs) {
-        fs.unlinkSync(lockFilePath);
-        return true;
-      }
+      // Serialize concurrent contenders attempting stale-lock recovery
+      recoverFd = fs.openSync(recoverLockPath, 'wx', 0o600);
     } catch (_) {
-      // Lock may already be released or mid-write
+      return false;
     }
-    return false;
+    try {
+      let stat;
+      try {
+        stat = fs.statSync(lockFilePath);
+      } catch (_) {
+        return false;
+      }
+      let parsed = null;
+      try {
+        const raw = fs.readFileSync(lockFilePath, 'utf-8');
+        parsed = JSON.parse(raw);
+      } catch (_) {
+        // Only recover an unparseable/corrupt lockfile if it has been untouched past staleLockMs
+        if (Date.now() - stat.mtimeMs > staleLockMs) {
+          try { fs.unlinkSync(lockFilePath); return true; } catch (__) { return false; }
+        }
+        return false;
+      }
+      // NEVER evict a lock whose owner PID is still alive (even if held > staleLockMs)
+      if (parsed && Number.isInteger(parsed.pid)) {
+        if (isPidAlive(parsed.pid)) {
+          return false;
+        }
+        try {
+          fs.unlinkSync(lockFilePath);
+          return true;
+        } catch (_) {
+          return false;
+        }
+      }
+      return false;
+    } finally {
+      if (recoverFd !== null) {
+        try { fs.closeSync(recoverFd); } catch (_) {}
+        try { fs.unlinkSync(recoverLockPath); } catch (_) {}
+      }
+    }
   }
 
   function busyWait(ms) {
@@ -574,43 +609,73 @@ function createCrossProcessFileLockBinding(options = {}) {
     acquireLock(fd, mode, timeoutMs = 5000) {
       if (typeof fd !== 'number' || fd < 0) return false;
       const deadline = Date.now() + timeoutMs;
-      while (Date.now() <= deadline) {
+      const ownerToken = crypto.randomBytes(16).toString('hex');
+      const tmpPath = `${lockFilePath}.${process.pid}.${ownerToken}.tmp`;
+
+      // Pre-write and fsync full JSON payload to unique temp file before atomic link
+      try {
+        const tmpFd = fs.openSync(tmpPath, 'wx', 0o600);
         try {
-          const lockFd = fs.openSync(lockFilePath, 'wx', 0o600);
-          try {
-            const payload = JSON.stringify({ pid: process.pid, fd, mode, acquiredAt: Date.now() });
-            fs.writeSync(lockFd, payload);
-            fs.fsyncSync(lockFd);
-          } finally {
-            fs.closeSync(lockFd);
-          }
-          heldFds.set(fd, mode);
-          operationLog.push({ op: 'acquireLock', fd, mode, semantics: 'CROSS_PROCESS_ATOMIC_LOCKFILE', pid: process.pid, timestamp: Date.now() });
-          return true;
-        } catch (err) {
-          if (err && err.code === 'EEXIST') {
-            tryRecoverStaleLock();
-            if (Date.now() >= deadline) return false;
-            busyWait(retryIntervalMs);
-            continue;
-          }
-          return false;
+          const payload = JSON.stringify({
+            pid: process.pid,
+            ownerToken,
+            fd,
+            mode,
+            acquiredAt: Date.now()
+          });
+          fs.writeSync(tmpFd, payload);
+          fs.fsyncSync(tmpFd);
+        } finally {
+          fs.closeSync(tmpFd);
         }
+      } catch (_) {
+        try { fs.unlinkSync(tmpPath); } catch (__) {}
+        return false;
       }
-      return false;
+
+      try {
+        while (Date.now() <= deadline) {
+          try {
+            // Atomic hard-link: fails with EEXIST if lockFilePath already exists; never exposes partial write
+            fs.linkSync(tmpPath, lockFilePath);
+            heldFds.set(fd, { mode, ownerToken });
+            operationLog.push({ op: 'acquireLock', fd, mode, ownerToken, semantics: 'CROSS_PROCESS_ATOMIC_LOCKFILE', pid: process.pid, timestamp: Date.now() });
+            return true;
+          } catch (err) {
+            if (err && err.code === 'EEXIST') {
+              tryRecoverStaleLock();
+              if (Date.now() >= deadline) return false;
+              busyWait(retryIntervalMs);
+              continue;
+            }
+            return false;
+          }
+        }
+        return false;
+      } finally {
+        try { fs.unlinkSync(tmpPath); } catch (_) {}
+      }
     },
     releaseLock(fd) {
-      const wasHeld = heldFds.has(fd);
+      const held = heldFds.get(fd);
       heldFds.delete(fd);
-      if (wasHeld) {
-        try {
-          fs.unlinkSync(lockFilePath);
-        } catch (_) {
-          // Ignore if already removed
-        }
+      if (!held) {
+        return false;
       }
-      operationLog.push({ op: 'releaseLock', fd, semantics: 'CROSS_PROCESS_ATOMIC_LOCKFILE', pid: process.pid, timestamp: Date.now() });
-      return wasHeld;
+      let unlinked = false;
+      try {
+        // Verify ownership token + PID before unlinking so an old holder can NEVER unlink a new holder's lock
+        const raw = fs.readFileSync(lockFilePath, 'utf-8');
+        const parsed = JSON.parse(raw);
+        if (parsed && parsed.ownerToken === held.ownerToken && parsed.pid === process.pid) {
+          fs.unlinkSync(lockFilePath);
+          unlinked = true;
+        }
+      } catch (_) {
+        unlinked = false;
+      }
+      operationLog.push({ op: 'releaseLock', fd, ownerToken: held.ownerToken, unlinked, semantics: 'CROSS_PROCESS_ATOMIC_LOCKFILE', pid: process.pid, timestamp: Date.now() });
+      return unlinked;
     },
     isLocked(fd) {
       return heldFds.has(fd);
@@ -934,6 +999,36 @@ function resolveSafePathNoSymlinks(workspaceRoot, relativeOrTargetPath) {
  * before and after single Buffer read, freezes the memory snapshot, and severing all
  * subsequent operations from disk re-reads (eliminating post-read TOCTOU).
  */
+const _brandedFdSnapshots = new WeakSet();
+const _brandedFdProofTokens = new WeakSet();
+
+function isBrandedFdSnapshot(snapshot) {
+  return Boolean(snapshot && typeof snapshot === 'object' && _brandedFdSnapshots.has(snapshot));
+}
+
+function sealFdVerifiedEvidence(item, snapshot) {
+  if (!item || typeof item !== 'object') return false;
+  if (!isBrandedFdSnapshot(snapshot)) return false;
+  if (item.sourceFileSha256 !== snapshot.sha256) return false;
+  const proofToken = Object.freeze(Object.assign(Object.create(null), {
+    brand: 'ANTIGRAVITY_FD_SNAPSHOT_PROOF_v1',
+    fileSha256: snapshot.sha256,
+    filePath: snapshot.filePath
+  }));
+  _brandedFdProofTokens.add(proofToken);
+  item.fdProofToken = proofToken;
+  return true;
+}
+
+function isFdVerifiedEvidenceItem(item) {
+  if (!item || typeof item !== 'object') return false;
+  const token = item.fdProofToken;
+  if (!token || typeof token !== 'object' || !_brandedFdProofTokens.has(token)) {
+    return false;
+  }
+  return typeof item.sourceFileSha256 === 'string' && token.fileSha256 === item.sourceFileSha256;
+}
+
 function readImmutableFileSnapshot(filePath, options = {}) {
   if (typeof filePath !== 'string' || !filePath) {
     throw new ContextIsolationError('INVALID_PATH', 'filePath must be a non-empty string');
@@ -982,7 +1077,7 @@ function readImmutableFileSnapshot(filePath, options = {}) {
     const privateBuffer = Buffer.from(buffer);
     const immutableBytes = Object.freeze(Array.from(privateBuffer));
 
-    return Object.freeze(Object.assign(Object.create(null), {
+    const snapshot = Object.freeze(Object.assign(Object.create(null), {
       filePath,
       byteLength: privateBuffer.length,
       sha256,
@@ -998,6 +1093,8 @@ function readImmutableFileSnapshot(filePath, options = {}) {
         return Buffer.from(privateBuffer);
       }
     }));
+    _brandedFdSnapshots.add(snapshot);
+    return snapshot;
   } finally {
     fs.closeSync(fd);
   }
@@ -1518,6 +1615,9 @@ module.exports = {
   resetSandboxLockdownAdmin,
   resolveSafePathNoSymlinks,
   readImmutableFileSnapshot,
+  isBrandedFdSnapshot,
+  sealFdVerifiedEvidence,
+  isFdVerifiedEvidenceItem,
   executeSqliteWithWalRetry,
   scanWithAbortCheckpoints,
   AUTHORITATIVE_90_ROW_MATRIX,

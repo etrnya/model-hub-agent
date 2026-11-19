@@ -203,15 +203,15 @@ Agent OS has undergone several critical architectural upgrades, each driven by r
 
 9. **Phase 9: Evidence-First Context Infrastructure (P1-C1 ~ P1-C4)** (2026-11-13 ~ 2026-11-17)
    - **Trigger**: Raw LLM retrieval lacked provenance verification, tenant isolation, and strict token budget enforcement, risking context drift and unverified trust escalation.
-   - **Solution**: Built the `CallGraphEngine` → `RoleAwareContextPlanner` → `EvidenceAdmissionEngine` → `ContextCompiler` → `IsolationBoundary` (90-cell matrix) pipeline in [cascading_executor.js](file:///c:/Users/etrny/.gemini/antigravity/scratch/model-hub-agent/services/cascading_executor.js), with two-phase self-correction (`depth=3`) and 20/20 offline test suites.
+   - **Solution**: Built the `CallGraphEngine` → `RoleAwareContextPlanner` → `EvidenceAdmissionEngine` → `ContextCompiler` → `IsolationBoundary` (90-cell matrix) pipeline in [cascading_executor.js](file:///c:/Users/etrny/.gemini/antigravity/scratch/model-hub-agent/services/cascading_executor.js), with two-phase self-correction (`depth=3`) and full offline test suite verification.
 
 10. **Phase 10: Observability Telemetry, Idempotency & Apache 2.0 Governance (v1.5.0)** (2026-11-17 ~ 2026-11-19)
     - **Trigger**: Multi-stage retries and concurrent API submissions required idempotency enforcement, compilation telemetry, and unified versioning/licensing.
-    - **Solution**: Added `x-idempotency-key` SHA-256 conflict detection (`409`), non-fatal CodeGraph telemetry across API/Dashboard, cross-module invariant assertions (`C4-T11` / `C4-T12`), Apache 2.0 licensing, and aligned `package.json` SemVer (`1.5.0`) with Git tags.
+    - **Solution**: Added `x-idempotency-key` SHA-256 conflict detection (`409`), non-fatal CodeGraph telemetry across API/Dashboard, cross-module invariant assertions (`C4-T11` / `C4-T12`), fault-injection security suite (`test_remediation_fault_injection.js`), Apache 2.0 licensing, and aligned `package.json` SemVer (`1.5.0`) with Git tags.
 
 ## 🏷️ Versioning Policy
 - **`package.json` (`1.5.0`)** follows Semantic Versioning (`MAJOR.MINOR.PATCH`) and serves as the canonical release version, aligned with Git tags (`v1.3.0-phase-3` → `v1.4.0-phase-1-consolidated` → `v1.5.0`).
-- **Offline Test Baseline**: All releases must pass `npm test` (20/20 offline suites, Exit Code 0) with `tests/run_tests.js` bidirectional manifest integrity.
+- **Offline Test Baseline**: All releases must pass `npm test` (all registered offline test suites — currently 21/21, Exit Code 0) with `tests/run_tests.js` bidirectional manifest integrity.
 
 ## 📄 License
 This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENSE) file for details.
