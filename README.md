@@ -4,7 +4,7 @@
 
 **Antigravity Agent OS** is an industrial-grade, highly resilient AI orchestration kernel.
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
 **Antigravity Agent OS** is an industrial-grade, resilient AI orchestration kernel designed to solve common LLM application challenges: model unreliability, context overflow, and uncontrolled API costs. It transforms a collection of fragile API calls into a robust, self-healing "Operating System" for AI agents.
 
@@ -193,4 +193,4 @@ Agent OS has undergone several critical architectural upgrades, each driven by r
    - **Solution**: Developed [MemoryManager](file:///c:/Users/etrny/.gemini/antigravity/scratch/model-hub-agent/infrastructure/adapters/memory_manager.js) using Vertex AI `text-embedding-004` to vectorize objectives, performing Cosine similarity lookups in Docker Qdrant. Hit rates >= 95% bypass cloud LLM inference entirely, achieving 0 token consumption and sub-second execution speeds.
 
 ## 📄 License
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENSE) file for details.

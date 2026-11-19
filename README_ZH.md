@@ -186,4 +186,4 @@ Agent OS 內置了多種工業級的 Token 優化機制，以最小化 API 調�
    - **解法**：開發 [MemoryManager](file:///c:/Users/etrny/.gemini/antigravity/scratch/model-hub-agent/infrastructure/adapters/memory_manager.js)，整合 Vertex AI `text-embedding-004` 提取任務特徵向量，並在 Docker Qdrant 中進行語意相似度檢索。相似度 >= 95% 時直接返回歷史成功的 JSON 結果，達成 0 Token 消耗與 sub-second 級超低延遲。
 
 ## 📜 授權協議
-本專案採用 [MIT License](LICENSE) 授權。
+本專案採用 [Apache License 2.0](LICENSE) 授權。
