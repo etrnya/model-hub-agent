@@ -165,13 +165,48 @@ class TaskManager {
     // 1.5 冪等鍵 (x-idempotency-key) 查重與完整 Canonical Payload 衝突防護
     let payloadHash = null;
     if (idempotencyKey) {
+      // Strict JSON-compatible + undefined canonicalizer (rejects NaN, Infinity, non-plain objects, cycles)
+      const seenObjects = new WeakSet();
       const canonicalize = (val) => {
         if (val === undefined) return ['U'];
         if (val === null) return ['N'];
-        if (typeof val !== 'object') return ['P', typeof val, val];
-        if (Array.isArray(val)) return ['A', val.map(canonicalize)];
-        const entries = Object.keys(val).sort().map(k => [k, canonicalize(val[k])]);
-        return ['O', entries];
+        const t = typeof val;
+        if (t === 'boolean' || t === 'string') return ['P', t, val];
+        if (t === 'number') {
+          if (!Number.isFinite(val)) {
+            const err = new Error('INVALID_PARAMETER: Idempotent payload must not contain NaN or Infinity.');
+            err.type = 'INVALID_PARAMETER';
+            err.statusCode = 400;
+            throw err;
+          }
+          return ['P', 'number', Object.is(val, -0) ? 0 : val];
+        }
+        if (t !== 'object') {
+          const err = new Error(`INVALID_PARAMETER: Unsupported non-JSON type '${t}' in idempotent payload.`);
+          err.type = 'INVALID_PARAMETER';
+          err.statusCode = 400;
+          throw err;
+        }
+        if (seenObjects.has(val)) {
+          const err = new Error('INVALID_PARAMETER: Circular reference detected in idempotent payload.');
+          err.type = 'INVALID_PARAMETER';
+          err.statusCode = 400;
+          throw err;
+        }
+        if (val instanceof Date || val instanceof Map || val instanceof Set || val instanceof RegExp || Buffer.isBuffer(val)) {
+          const err = new Error(`INVALID_PARAMETER: Non-JSON object instance (${val.constructor.name}) is not allowed in idempotent payload.`);
+          err.type = 'INVALID_PARAMETER';
+          err.statusCode = 400;
+          throw err;
+        }
+        seenObjects.add(val);
+        try {
+          if (Array.isArray(val)) return ['A', val.map(canonicalize)];
+          const entries = Object.keys(val).sort().map(k => [k, canonicalize(val[k])]);
+          return ['O', entries];
+        } finally {
+          seenObjects.delete(val);
+        }
       };
       const canonicalPayload = canonicalize({
         role: selectedRoleId,

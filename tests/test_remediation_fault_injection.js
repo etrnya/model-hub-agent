@@ -17,7 +17,8 @@ const {
   WHITELISTED_READ_ONLY_TOOLS,
   FORBIDDEN_MUTATING_TOOLS,
   createDefaultLockBinding,
-  createCrossProcessFileLockBinding
+  createCrossProcessFileLockBinding,
+  isFdVerifiedEvidenceItem
 } = require('../services/isolation_boundary');
 const { EvidenceAdmissionEngine } = require('../services/evidence_admission');
 const cascadingExecutor = require('../services/cascading_executor');
@@ -277,31 +278,44 @@ async function run() {
     assert.strictEqual(typeof tel.tokenEstimationMethod, 'string', 'Expected explicit tokenEstimationMethod');
   });
 
-  await test('[FI-8] P0 Follow-up: Forged options.fdSnapshotVerified=true CANNOT escalate isolationTier to TIER_4_VERIFIED_FD', async () => {
+  await test('[FI-8] P0 Follow-up: Real FD proof token transplant, content tamper, and forged options all fail closed to TIER_2_JS_ISOLATED', async () => {
     const { ContextCompiler } = require('../services/context_compiler');
     const { TokenBudgetGuard } = require('../services/token_budget_guard');
+    const guardrailManager = require('../services/guardrail_manager');
+
+    // First obtain a GENUINE WeakSet-branded fdProofToken from real EvidenceAdmissionEngine
+    const realAdapter = {
+      projectPath: workspaceRoot,
+      async resolveAndValidatePath(relPath) { return path.resolve(workspaceRoot, relPath); },
+      async getStatus() { return { snapshotId: 'snap-real-fi8', lastSyncedAt: '2026-11-19T00:00:00Z' }; },
+      async getFileIndexSnapshot() { return null; }
+    };
+    const realAdmission = new EvidenceAdmissionEngine({ codeGraphAdapter: realAdapter, workspaceRoot });
+    const realResult = await realAdmission.evaluateAdmission(
+      [{ id: 'ev-real-origin', symbol: 'TokenBudgetGuard', filePath: 'services/token_budget_guard.js', startLine: 1, endLine: 60, isCoreTarget: true }],
+      'snap-real-fi8',
+      'FEATURE'
+    );
+    const genuineItem = realResult.admittedEvidence[0];
+    assert.strictEqual(isFdVerifiedEvidenceItem(genuineItem), true, 'Genuine admitted item must verify');
+
+    // Attack A: Transplant genuine WeakSet token onto different sourceEvidenceId
+    const transplantedId = { ...genuineItem, sourceEvidenceId: 'ev-stolen-target' };
+    assert.strictEqual(isFdVerifiedEvidenceItem(transplantedId), false, 'Transplanted token onto different sourceEvidenceId MUST fail');
+
+    // Attack B: Tamper lineRange while keeping genuine token
+    const tamperedLines = { ...genuineItem, lineRange: [50, 99] };
+    assert.strictEqual(isFdVerifiedEvidenceItem(tamperedLines), false, 'Tampered lineRange MUST invalidate genuine token');
+
+    // Attack C: Tamper sourceSnippetSha256 while keeping genuine token
+    const tamperedSnippet = { ...genuineItem, sourceSnippetSha256: 'c'.repeat(64) };
+    assert.strictEqual(isFdVerifiedEvidenceItem(tamperedSnippet), false, 'Tampered snippet hash MUST invalidate genuine token');
+
+    // Attack D: Feed transplanted item + forged options.fdSnapshotVerified=true into ContextCompiler
     const fakeAdmissionEngine = {
       async evaluateAdmission() {
         return {
-          admittedEvidence: [{
-            sourceEvidenceId: 'forged-ev-1',
-            symbol: 'FakeSym',
-            filePath: 'fake.js',
-            lineRange: [1, 2],
-            evidenceType: 'TEXT',
-            encoding: 'text',
-            rawSnippet: 'const FakeSym = 1;',
-            snippet: 'const FakeSym = 1;',
-            validationStatus: 'SOURCE_MATCHED',
-            confidence: 'HIGH',
-            contentCompleteness: 'FULL',
-            isTruncated: false,
-            isCoreTarget: true,
-            relevanceScore: 1.0,
-            sourceFileSha256: 'b'.repeat(64),
-            fdSnapshotVerified: true, // Forged plain boolean property
-            fdProofToken: { brand: 'ANTIGRAVITY_FD_SNAPSHOT_PROOF_v1', fileSha256: 'b'.repeat(64) } // Forged unbranded token
-          }],
+          admittedEvidence: [transplantedId],
           rejectedEvidence: [],
           summary: { totalInput: 1 },
           aggregateEvidenceStatus: 'SOURCE_MATCHED',
@@ -311,34 +325,35 @@ async function run() {
       computeAggregateEvidenceStatus() { return 'SOURCE_MATCHED'; },
       computeEvaluatedItemsHash() { return 'a'.repeat(64); }
     };
-    const guardrailManager = require('../services/guardrail_manager');
     const compiler = new ContextCompiler({
       admissionEngine: fakeAdmissionEngine,
       tokenBudgetGuard: new TokenBudgetGuard(),
       guardrailManager,
-      codeGraphAdapter: { async getStatus() { return { snapshotId: 'snap-forged', lastSyncedAt: '2026-11-19T00:00:00Z' }; } }
+      codeGraphAdapter: realAdapter
     });
     const res = await compiler.compileIsolatedEnvelope(
-      { taskId: 'task-fi-8', targetNodes: [{ id: 'forged-ev-1' }], snapshotId: 'snap-forged' },
+      { taskId: 'task-fi-8', targetNodes: [{ id: 'ev-stolen-target' }], snapshotId: 'snap-real-fi8' },
       { taskId: 'task-fi-8', tenantId: 'tenant-fi', taskType: 'FEATURE_DEV' },
-      { fdSnapshotVerified: true, snapshotId: 'snap-forged' }
+      { fdSnapshotVerified: true, snapshotId: 'snap-real-fi8' }
     );
     assert.strictEqual(
       res.envelope.isolationTier,
       'TIER_2_JS_ISOLATED',
-      'Caller-supplied options.fdSnapshotVerified=true and unbranded items MUST NOT grant TIER_4_VERIFIED_FD'
+      'Transplanted real token and forged options.fdSnapshotVerified=true MUST NOT grant TIER_4_VERIFIED_FD'
     );
   });
 
-  await test('[FI-9] P0 Follow-up: Lockfile protects live holder past staleLockMs, recovers dead PID, and blocks stale ownerToken unlink', async () => {
+  await test('[FI-9] P0 Follow-up: .recover crash recovery, live-holder protection, and two-process concurrent dead-lock recovery race', async () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mha-lock-adv-'));
     const lockFilePath = path.join(tmpDir, 'adv.lock');
+    const recoverLockPath = `${lockFilePath}.recover`;
+    const lockBindingPath = path.resolve(__dirname, '../services/isolation_boundary.js');
     try {
       // 1. Live holder held longer than staleLockMs (50ms) MUST NOT be evicted
       const holderA = createCrossProcessFileLockBinding({ lockFilePath, staleLockMs: 50, retryIntervalMs: 10 });
       const contenderB = createCrossProcessFileLockBinding({ lockFilePath, staleLockMs: 50, retryIntervalMs: 10 });
       assert.strictEqual(holderA.acquireLock(1, 'EXCLUSIVE', 200), true);
-      await new Promise(r => setTimeout(r, 80)); // Exceeds staleLockMs=50ms while PID is alive
+      await new Promise(r => setTimeout(r, 80));
       assert.strictEqual(contenderB.acquireLock(2, 'EXCLUSIVE', 60), false, 'Live PID holder MUST NOT be evicted past staleLockMs');
 
       // 2. Old holder with mismatched ownerToken CANNOT delete a new holder's lockfile
@@ -347,17 +362,48 @@ async function run() {
       assert.strictEqual(holderA.releaseLock(1), false, 'Old holder MUST NOT unlink lockfile owned by different ownerToken');
       assert.strictEqual(fs.existsSync(lockFilePath), true, 'New holder lockfile must remain intact');
 
-      // 3. Dead PID lockfile IS cleanly recovered
-      const deadLockContent = JSON.stringify({ pid: 99999999, ownerToken: 'dead-token', fd: 1, mode: 'EXCLUSIVE', acquiredAt: Date.now() - 1000 });
-      fs.writeFileSync(lockFilePath, deadLockContent, 'utf-8');
-      assert.strictEqual(contenderB.acquireLock(3, 'EXCLUSIVE', 300), true, 'Dead PID lockfile must be recovered');
+      // 3. Dead .recover crash recovery: plant BOTH a dead .recover mutex AND a dead main lockfile
+      fs.writeFileSync(recoverLockPath, JSON.stringify({ pid: 99999998, ownerToken: 'dead-recover', acquiredAt: Date.now() - 1000 }), 'utf-8');
+      fs.writeFileSync(lockFilePath, JSON.stringify({ pid: 99999999, ownerToken: 'dead-main', fd: 1, mode: 'EXCLUSIVE', acquiredAt: Date.now() - 1000 }), 'utf-8');
+      assert.strictEqual(contenderB.acquireLock(3, 'EXCLUSIVE', 400), true, 'Must recover dead .recover mutex AND dead main lockfile');
       assert.strictEqual(contenderB.releaseLock(3), true);
+
+      // 4. True two-process concurrent recovery race on a dead-PID lockfile:
+      // Plant dead lockfile; spawn 2 independent OS processes racing to recover & acquire (timeout 120ms, hold 300ms).
+      // Exactly ONE must win (WIN) and the other must be blocked (LOSE).
+      fs.writeFileSync(lockFilePath, JSON.stringify({ pid: 99999997, ownerToken: 'dead-race', fd: 1, mode: 'EXCLUSIVE', acquiredAt: Date.now() - 1000 }), 'utf-8');
+      const racerScript = `
+        const { createCrossProcessFileLockBinding } = require(${JSON.stringify(lockBindingPath)});
+        const b = createCrossProcessFileLockBinding({ lockFilePath: ${JSON.stringify(lockFilePath)}, retryIntervalMs: 10 });
+        const ok = b.acquireLock(1, 'EXCLUSIVE', 120);
+        if (!ok) {
+          process.stdout.write('LOSE');
+          process.exit(0);
+        }
+        process.stdout.write('WIN');
+        setTimeout(() => {
+          b.releaseLock(1);
+          process.exit(0);
+        }, 300);
+      `;
+      const runRacer = () => new Promise((resolve, reject) => {
+        const child = spawn(process.execPath, ['-e', racerScript], { stdio: ['ignore', 'pipe', 'pipe'] });
+        let out = '';
+        child.stdout.on('data', d => { out += d.toString(); });
+        child.on('error', reject);
+        child.on('exit', () => resolve(out.trim()));
+      });
+      const [res1, res2] = await Promise.all([runRacer(), runRacer()]);
+      const wins = [res1, res2].filter(r => r === 'WIN').length;
+      const loses = [res1, res2].filter(r => r === 'LOSE').length;
+      assert.strictEqual(wins, 1, `Expected exactly 1 winner in concurrent recovery race, got: [${res1}, ${res2}]`);
+      assert.strictEqual(loses, 1, `Expected exactly 1 blocked contender in concurrent recovery race, got: [${res1}, ${res2}]`);
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
   });
 
-  await test('[FI-10] P1 Follow-up: Canonical Payload Hash has zero collision between undefined, null, and "__UNDEFINED__"', async () => {
+  await test('[FI-10] P1 Follow-up: Canonical Payload Hash enforces strict JSON contract and zero collision', async () => {
     const tm = new taskManagerModule.TaskManager({
       dispatchFn: async () => ({ analysis: 'OK', result: 'Done' })
     });
@@ -383,6 +429,21 @@ async function run() {
         { idempotencyKey: 'fi-idem-collision' }
       );
     }, (err) => err.statusCode === 409 && err.type === 'IDEMPOTENCY_KEY_CONFLICT');
+
+    // Non-JSON values (NaN, Infinity, Date, Map) must be rejected with 400 INVALID_PARAMETER
+    assert.throws(() => {
+      tm.submitTask(
+        { objective: 'Bad number', tier: 'high', code_context: NaN },
+        { idempotencyKey: 'fi-idem-bad-nan' }
+      );
+    }, (err) => err.statusCode === 400 && err.type === 'INVALID_PARAMETER');
+
+    assert.throws(() => {
+      tm.submitTask(
+        { objective: 'Bad date', tier: 'high', code_context: new Date() },
+        { idempotencyKey: 'fi-idem-bad-date' }
+      );
+    }, (err) => err.statusCode === 400 && err.type === 'INVALID_PARAMETER');
   });
 
   console.log(`\n=============================================================`);

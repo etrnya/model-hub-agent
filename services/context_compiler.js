@@ -561,12 +561,18 @@ class ContextCompiler {
     }
 
     // Preserve unforgeable WeakSet-branded fdProofToken across TokenBudgetGuard's structuredClone boundary
+    // ONLY when all 6 evidence identity fields match the original admitted item.
     const fdProofByEvidenceId = new Map();
     for (const orig of (admissionResult.admittedEvidence || [])) {
       if (orig && orig.sourceEvidenceId && orig.fdProofToken) {
         fdProofByEvidenceId.set(orig.sourceEvidenceId, {
           token: orig.fdProofToken,
-          sha256: orig.sourceFileSha256
+          filePath: orig.filePath,
+          symbol: orig.symbol,
+          startLine: Array.isArray(orig.lineRange) ? orig.lineRange[0] : null,
+          endLine: Array.isArray(orig.lineRange) ? orig.lineRange[1] : null,
+          fileSha256: orig.sourceFileSha256,
+          snippetSha256: orig.sourceSnippetSha256
         });
       }
     }
@@ -575,7 +581,17 @@ class ContextCompiler {
       const finalSnippet = item.snippet !== undefined ? item.snippet : (item.sanitizedSnippet || item.rawSnippet || '');
       const emittedHash = crypto.createHash('sha256').update(finalSnippet, 'utf8').digest('hex');
       const proofEntry = fdProofByEvidenceId.get(item.sourceEvidenceId);
-      const preservedToken = (proofEntry && proofEntry.sha256 === item.sourceFileSha256) ? proofEntry.token : undefined;
+      const identityMatches = Boolean(
+        proofEntry &&
+        proofEntry.filePath === item.filePath &&
+        proofEntry.symbol === item.symbol &&
+        proofEntry.fileSha256 === item.sourceFileSha256 &&
+        proofEntry.snippetSha256 === item.sourceSnippetSha256 &&
+        Array.isArray(item.lineRange) &&
+        proofEntry.startLine === item.lineRange[0] &&
+        proofEntry.endLine === item.lineRange[1]
+      );
+      const preservedToken = identityMatches ? proofEntry.token : undefined;
       return {
         ...item,
         fdProofToken: preservedToken,

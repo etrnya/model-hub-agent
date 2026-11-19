@@ -549,15 +549,76 @@ function createCrossProcessFileLockBinding(options = {}) {
     }
   }
 
-  function tryRecoverStaleLock() {
-    let recoverFd = null;
+  function writeAndAtomicLink(targetPath, payloadObj) {
+    const tmpPath = `${targetPath}.${process.pid}.${payloadObj.ownerToken}.tmp`;
     try {
-      // Serialize concurrent contenders attempting stale-lock recovery
-      recoverFd = fs.openSync(recoverLockPath, 'wx', 0o600);
-    } catch (_) {
+      const tmpFd = fs.openSync(tmpPath, 'wx', 0o600);
+      try {
+        fs.writeSync(tmpFd, JSON.stringify(payloadObj));
+        fs.fsyncSync(tmpFd);
+      } finally {
+        fs.closeSync(tmpFd);
+      }
+      fs.linkSync(tmpPath, targetPath);
+      return true;
+    } catch (err) {
+      if (err && err.code === 'EEXIST') return false;
       return false;
+    } finally {
+      try { fs.unlinkSync(tmpPath); } catch (_) {}
     }
+  }
+
+  function tryRecoverDeadRecoverMutex() {
     try {
+      const stat = fs.statSync(recoverLockPath);
+      let parsed = null;
+      try {
+        parsed = JSON.parse(fs.readFileSync(recoverLockPath, 'utf-8'));
+      } catch (_) {
+        if (Date.now() - stat.mtimeMs > staleLockMs) {
+          try { fs.unlinkSync(recoverLockPath); return true; } catch (__) { return false; }
+        }
+        return false;
+      }
+      // NEVER evict a live .recover holder
+      if (parsed && Number.isInteger(parsed.pid) && !isPidAlive(parsed.pid)) {
+        try { fs.unlinkSync(recoverLockPath); return true; } catch (_) { return false; }
+      }
+    } catch (_) {
+      // .recover already removed
+    }
+    return false;
+  }
+
+  function withRecoveryMutex(fn, timeoutMs = 1500) {
+    const recoverToken = crypto.randomBytes(16).toString('hex');
+    const deadline = Date.now() + timeoutMs;
+    let acquired = false;
+    while (Date.now() <= deadline) {
+      if (writeAndAtomicLink(recoverLockPath, { pid: process.pid, ownerToken: recoverToken, acquiredAt: Date.now() })) {
+        acquired = true;
+        break;
+      }
+      tryRecoverDeadRecoverMutex();
+      if (Date.now() >= deadline) break;
+      busyWait(Math.min(retryIntervalMs, 10));
+    }
+    if (!acquired) return { mutexAcquired: false, result: false };
+    try {
+      return { mutexAcquired: true, result: fn() };
+    } finally {
+      try {
+        const parsed = JSON.parse(fs.readFileSync(recoverLockPath, 'utf-8'));
+        if (parsed && parsed.ownerToken === recoverToken && parsed.pid === process.pid) {
+          fs.unlinkSync(recoverLockPath);
+        }
+      } catch (_) {}
+    }
+  }
+
+  function tryRecoverStaleLock() {
+    const outcome = withRecoveryMutex(() => {
       let stat;
       try {
         stat = fs.statSync(lockFilePath);
@@ -569,7 +630,6 @@ function createCrossProcessFileLockBinding(options = {}) {
         const raw = fs.readFileSync(lockFilePath, 'utf-8');
         parsed = JSON.parse(raw);
       } catch (_) {
-        // Only recover an unparseable/corrupt lockfile if it has been untouched past staleLockMs
         if (Date.now() - stat.mtimeMs > staleLockMs) {
           try { fs.unlinkSync(lockFilePath); return true; } catch (__) { return false; }
         }
@@ -588,12 +648,8 @@ function createCrossProcessFileLockBinding(options = {}) {
         }
       }
       return false;
-    } finally {
-      if (recoverFd !== null) {
-        try { fs.closeSync(recoverFd); } catch (_) {}
-        try { fs.unlinkSync(recoverLockPath); } catch (_) {}
-      }
-    }
+    });
+    return outcome.result;
   }
 
   function busyWait(ms) {
@@ -605,74 +661,67 @@ function createCrossProcessFileLockBinding(options = {}) {
   return {
     lockSemantics: 'CROSS_PROCESS_ATOMIC_LOCKFILE',
     lockFilePath,
+    recoverLockPath,
     operationLog,
     acquireLock(fd, mode, timeoutMs = 5000) {
       if (typeof fd !== 'number' || fd < 0) return false;
       const deadline = Date.now() + timeoutMs;
       const ownerToken = crypto.randomBytes(16).toString('hex');
-      const tmpPath = `${lockFilePath}.${process.pid}.${ownerToken}.tmp`;
+      const payload = {
+        pid: process.pid,
+        ownerToken,
+        fd,
+        mode,
+        acquiredAt: Date.now()
+      };
 
-      // Pre-write and fsync full JSON payload to unique temp file before atomic link
-      try {
-        const tmpFd = fs.openSync(tmpPath, 'wx', 0o600);
-        try {
-          const payload = JSON.stringify({
-            pid: process.pid,
-            ownerToken,
-            fd,
-            mode,
-            acquiredAt: Date.now()
-          });
-          fs.writeSync(tmpFd, payload);
-          fs.fsyncSync(tmpFd);
-        } finally {
-          fs.closeSync(tmpFd);
+      while (Date.now() <= deadline) {
+        if (writeAndAtomicLink(lockFilePath, payload)) {
+          heldFds.set(fd, { mode, ownerToken });
+          operationLog.push({ op: 'acquireLock', fd, mode, ownerToken, semantics: 'CROSS_PROCESS_ATOMIC_LOCKFILE', pid: process.pid, timestamp: Date.now() });
+          return true;
         }
-      } catch (_) {
-        try { fs.unlinkSync(tmpPath); } catch (__) {}
-        return false;
+        tryRecoverStaleLock();
+        if (Date.now() >= deadline) return false;
+        busyWait(retryIntervalMs);
       }
-
-      try {
-        while (Date.now() <= deadline) {
-          try {
-            // Atomic hard-link: fails with EEXIST if lockFilePath already exists; never exposes partial write
-            fs.linkSync(tmpPath, lockFilePath);
-            heldFds.set(fd, { mode, ownerToken });
-            operationLog.push({ op: 'acquireLock', fd, mode, ownerToken, semantics: 'CROSS_PROCESS_ATOMIC_LOCKFILE', pid: process.pid, timestamp: Date.now() });
-            return true;
-          } catch (err) {
-            if (err && err.code === 'EEXIST') {
-              tryRecoverStaleLock();
-              if (Date.now() >= deadline) return false;
-              busyWait(retryIntervalMs);
-              continue;
-            }
-            return false;
-          }
-        }
-        return false;
-      } finally {
-        try { fs.unlinkSync(tmpPath); } catch (_) {}
-      }
+      return false;
     },
     releaseLock(fd) {
       const held = heldFds.get(fd);
-      heldFds.delete(fd);
       if (!held) {
         return false;
       }
-      let unlinked = false;
-      try {
-        // Verify ownership token + PID before unlinking so an old holder can NEVER unlink a new holder's lock
-        const raw = fs.readFileSync(lockFilePath, 'utf-8');
-        const parsed = JSON.parse(raw);
-        if (parsed && parsed.ownerToken === held.ownerToken && parsed.pid === process.pid) {
-          fs.unlinkSync(lockFilePath);
-          unlinked = true;
+      // Execute ownership verification + unlink under the SAME recovery mutex to prevent release/recovery race
+      const outcome = withRecoveryMutex(() => {
+        let unlinked = false;
+        let stillOwned = false;
+        try {
+          const raw = fs.readFileSync(lockFilePath, 'utf-8');
+          const parsed = JSON.parse(raw);
+          if (parsed && parsed.ownerToken === held.ownerToken && parsed.pid === process.pid) {
+            stillOwned = true;
+            fs.unlinkSync(lockFilePath);
+            unlinked = true;
+          }
+        } catch (err) {
+          if (err && err.code === 'ENOENT') {
+            unlinked = false;
+            stillOwned = false;
+          }
         }
-      } catch (_) {
-        unlinked = false;
+        return { unlinked, stillOwned };
+      });
+
+      if (!outcome.mutexAcquired) {
+        // Keep heldFds entry intact so caller can retry release safely
+        operationLog.push({ op: 'releaseLock', fd, ownerToken: held.ownerToken, unlinked: false, retryable: true, semantics: 'CROSS_PROCESS_ATOMIC_LOCKFILE', pid: process.pid, timestamp: Date.now() });
+        return false;
+      }
+
+      const { unlinked, stillOwned } = outcome.result;
+      if (unlinked || !stillOwned) {
+        heldFds.delete(fd);
       }
       operationLog.push({ op: 'releaseLock', fd, ownerToken: held.ownerToken, unlinked, semantics: 'CROSS_PROCESS_ATOMIC_LOCKFILE', pid: process.pid, timestamp: Date.now() });
       return unlinked;
@@ -1009,11 +1058,22 @@ function isBrandedFdSnapshot(snapshot) {
 function sealFdVerifiedEvidence(item, snapshot) {
   if (!item || typeof item !== 'object') return false;
   if (!isBrandedFdSnapshot(snapshot)) return false;
+  if (typeof item.sourceEvidenceId !== 'string' || !item.sourceEvidenceId) return false;
+  if (typeof item.filePath !== 'string' || !item.filePath) return false;
+  if (typeof item.symbol !== 'string' || !item.symbol) return false;
+  if (!Array.isArray(item.lineRange) || item.lineRange.length !== 2) return false;
+  if (typeof item.sourceSnippetSha256 !== 'string' || item.sourceSnippetSha256.length !== 64) return false;
   if (item.sourceFileSha256 !== snapshot.sha256) return false;
   const proofToken = Object.freeze(Object.assign(Object.create(null), {
-    brand: 'ANTIGRAVITY_FD_SNAPSHOT_PROOF_v1',
+    brand: 'ANTIGRAVITY_FD_SNAPSHOT_PROOF_v2',
+    sourceEvidenceId: item.sourceEvidenceId,
+    logicalFilePath: item.filePath,
+    realFilePath: snapshot.filePath,
     fileSha256: snapshot.sha256,
-    filePath: snapshot.filePath
+    sourceSnippetSha256: item.sourceSnippetSha256,
+    symbol: item.symbol,
+    startLine: item.lineRange[0],
+    endLine: item.lineRange[1]
   }));
   _brandedFdProofTokens.add(proofToken);
   item.fdProofToken = proofToken;
@@ -1026,7 +1086,17 @@ function isFdVerifiedEvidenceItem(item) {
   if (!token || typeof token !== 'object' || !_brandedFdProofTokens.has(token)) {
     return false;
   }
-  return typeof item.sourceFileSha256 === 'string' && token.fileSha256 === item.sourceFileSha256;
+  return (
+    item.sourceEvidenceId === token.sourceEvidenceId &&
+    item.filePath === token.logicalFilePath &&
+    item.sourceFileSha256 === token.fileSha256 &&
+    item.sourceSnippetSha256 === token.sourceSnippetSha256 &&
+    item.symbol === token.symbol &&
+    Array.isArray(item.lineRange) &&
+    item.lineRange.length === 2 &&
+    item.lineRange[0] === token.startLine &&
+    item.lineRange[1] === token.endLine
+  );
 }
 
 function readImmutableFileSnapshot(filePath, options = {}) {
