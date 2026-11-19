@@ -194,23 +194,27 @@ class TaskManager {
           throw err;
         }
         if (Array.isArray(val)) {
-          if (Object.getOwnPropertySymbols(val).length > 0 || Object.keys(val).length !== val.length) {
-            const err = new Error('INVALID_PARAMETER: Sparse arrays or arrays with custom properties are not allowed in idempotent payload.');
+          const ownKeys = Reflect.ownKeys(val);
+          if (ownKeys.length !== val.length + 1) {
+            const err = new Error('INVALID_PARAMETER: Sparse arrays or arrays with custom/non-enumerable properties are not allowed in idempotent payload.');
             err.type = 'INVALID_PARAMETER';
             err.statusCode = 400;
             throw err;
           }
+          const descriptors = Object.getOwnPropertyDescriptors(val);
           seenObjects.add(val);
           try {
             const out = [];
             for (let i = 0; i < val.length; i++) {
-              if (!Object.prototype.hasOwnProperty.call(val, i)) {
-                const err = new Error('INVALID_PARAMETER: Sparse arrays are not allowed in idempotent payload.');
+              const key = String(i);
+              const desc = descriptors[key];
+              if (!desc || !desc.enumerable || desc.get || desc.set) {
+                const err = new Error(`INVALID_PARAMETER: Array element at index ${i} must be an enumerable data property (no holes or accessors).`);
                 err.type = 'INVALID_PARAMETER';
                 err.statusCode = 400;
                 throw err;
               }
-              out.push(canonicalize(val[i]));
+              out.push(canonicalize(desc.value));
             }
             return ['A', out];
           } finally {

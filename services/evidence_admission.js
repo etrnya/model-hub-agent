@@ -384,6 +384,7 @@ class EvidenceAdmissionEngine {
         warning,
         sourceFileSha256: fileSha256,
         sourceSnippetSha256: snippetSha256,
+        emittedContentSha256: snippetSha256,
         fdSnapshotVerified: false,
         statSnapshot
       };

@@ -522,17 +522,21 @@ function createDefaultLockBinding() {
 }
 
 /**
- * Real cross-process atomic lockfile binding using temp-file + fs.linkSync (atomic O_EXCL link).
- * - Eliminates half-written lockfiles on mid-write crash (payload is fsynced before linkSync).
- * - Protects live holders: NEVER evicts a lock while holder PID is alive, even beyond staleLockMs.
- * - Enforces ownerToken verification on releaseLock so a stale/old holder cannot delete a new holder's lock.
- * - Serializes dead-PID recovery via an atomic .recover mutex file so only one contender recovers.
+ * Cross-process atomic lockfile binding using temp-file + fs.linkSync (atomic O_EXCL link).
+ * - Default mode (allowBestEffortCrashRecovery: false -> 'CROSS_PROCESS_ATOMIC_LOCKFILE_STRICT'):
+ *   Strict Fail-Closed: NEVER deletes another process's lockfile, eliminating any eviction/recovery TOCTOU race.
+ * - Opt-in mode (allowBestEffortCrashRecovery: true -> 'CROSS_PROCESS_ATOMIC_LOCKFILE_BEST_EFFORT_RECOVERY'):
+ *   Enables best-effort dead-PID cleanup; explicitly documented as path-level best-effort (NOT OS-kernel flock/LockFileEx).
  */
 function createCrossProcessFileLockBinding(options = {}) {
   const lockFilePath = options.lockFilePath;
   if (typeof lockFilePath !== 'string' || !lockFilePath) {
     throw new ContextIsolationError('INVALID_LOCK_PATH', 'lockFilePath is required for cross-process file lock');
   }
+  const allowBestEffortCrashRecovery = options.allowBestEffortCrashRecovery === true;
+  const lockSemantics = allowBestEffortCrashRecovery
+    ? 'CROSS_PROCESS_ATOMIC_LOCKFILE_BEST_EFFORT_RECOVERY'
+    : 'CROSS_PROCESS_ATOMIC_LOCKFILE_STRICT';
   const staleLockMs = Number.isInteger(options.staleLockMs) && options.staleLockMs > 0 ? options.staleLockMs : 15000;
   const retryIntervalMs = Number.isInteger(options.retryIntervalMs) && options.retryIntervalMs > 0 ? options.retryIntervalMs : 15;
   const recoverLockPath = `${lockFilePath}.recover`;
@@ -587,8 +591,8 @@ function createCrossProcessFileLockBinding(options = {}) {
       return false;
     }
 
-    // Atomic quarantine rename: only ONE contender can move this exact file instance;
-    // eliminates the read-dead -> unlink-new-holder TOCTOU race.
+    // Best-effort quarantine rename (path-level; NOT OS-kernel flock/LockFileEx).
+    // Only used when caller explicitly opts into allowBestEffortCrashRecovery: true.
     const quarantinePath = `${recoverLockPath}.quarantine.${process.pid}.${crypto.randomBytes(8).toString('hex')}`;
     try {
       fs.renameSync(recoverLockPath, quarantinePath);
@@ -693,7 +697,7 @@ function createCrossProcessFileLockBinding(options = {}) {
   }
 
   return {
-    lockSemantics: 'CROSS_PROCESS_ATOMIC_LOCKFILE',
+    lockSemantics,
     lockFilePath,
     recoverLockPath,
     operationLog,
@@ -712,10 +716,12 @@ function createCrossProcessFileLockBinding(options = {}) {
       while (Date.now() <= deadline) {
         if (writeAndAtomicLink(lockFilePath, payload)) {
           heldFds.set(fd, { mode, ownerToken });
-          operationLog.push({ op: 'acquireLock', fd, mode, ownerToken, semantics: 'CROSS_PROCESS_ATOMIC_LOCKFILE', pid: process.pid, timestamp: Date.now() });
+          operationLog.push({ op: 'acquireLock', fd, mode, ownerToken, semantics: lockSemantics, pid: process.pid, timestamp: Date.now() });
           return true;
         }
-        tryRecoverStaleLock();
+        if (allowBestEffortCrashRecovery) {
+          tryRecoverStaleLock();
+        }
         if (Date.now() >= deadline) return false;
         busyWait(retryIntervalMs);
       }
@@ -726,8 +732,7 @@ function createCrossProcessFileLockBinding(options = {}) {
       if (!held) {
         return false;
       }
-      // Execute ownership verification + unlink under the SAME recovery mutex to prevent release/recovery race
-      const outcome = withRecoveryMutex(() => {
+      const doRelease = () => {
         let unlinked = false;
         let stillOwned = false;
         try {
@@ -745,11 +750,15 @@ function createCrossProcessFileLockBinding(options = {}) {
           }
         }
         return { unlinked, stillOwned };
-      });
+      };
+
+      // In strict mode, no other process ever unlinks our lockfile; in best-effort recovery mode, serialize via recovery mutex.
+      const outcome = allowBestEffortCrashRecovery
+        ? withRecoveryMutex(doRelease)
+        : { mutexAcquired: true, result: doRelease() };
 
       if (!outcome.mutexAcquired) {
-        // Keep heldFds entry intact so caller can retry release safely
-        operationLog.push({ op: 'releaseLock', fd, ownerToken: held.ownerToken, unlinked: false, retryable: true, semantics: 'CROSS_PROCESS_ATOMIC_LOCKFILE', pid: process.pid, timestamp: Date.now() });
+        operationLog.push({ op: 'releaseLock', fd, ownerToken: held.ownerToken, unlinked: false, retryable: true, semantics: lockSemantics, pid: process.pid, timestamp: Date.now() });
         return false;
       }
 
@@ -757,7 +766,7 @@ function createCrossProcessFileLockBinding(options = {}) {
       if (unlinked || !stillOwned) {
         heldFds.delete(fd);
       }
-      operationLog.push({ op: 'releaseLock', fd, ownerToken: held.ownerToken, unlinked, semantics: 'CROSS_PROCESS_ATOMIC_LOCKFILE', pid: process.pid, timestamp: Date.now() });
+      operationLog.push({ op: 'releaseLock', fd, ownerToken: held.ownerToken, unlinked, semantics: lockSemantics, pid: process.pid, timestamp: Date.now() });
       return unlinked;
     },
     isLocked(fd) {
@@ -1125,7 +1134,9 @@ function isFdVerifiedEvidenceItem(item) {
     item.filePath === token.logicalFilePath &&
     item.sourceFileSha256 === token.fileSha256 &&
     item.sourceSnippetSha256 === token.sourceSnippetSha256 &&
-    (!item.emittedContentSha256 || item.emittedContentSha256 === token.sourceSnippetSha256) &&
+    typeof item.emittedContentSha256 === 'string' &&
+    /^[0-9a-f]{64}$/.test(item.emittedContentSha256) &&
+    item.emittedContentSha256 === token.sourceSnippetSha256 &&
     item.symbol === token.symbol &&
     Array.isArray(item.lineRange) &&
     item.lineRange.length === 2 &&

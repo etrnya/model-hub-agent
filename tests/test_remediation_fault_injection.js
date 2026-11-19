@@ -52,7 +52,7 @@ async function run() {
 
     try {
       const realLock = createCrossProcessFileLockBinding({ lockFilePath });
-      assert.strictEqual(realLock.lockSemantics, 'CROSS_PROCESS_ATOMIC_LOCKFILE');
+      assert.strictEqual(realLock.lockSemantics, 'CROSS_PROCESS_ATOMIC_LOCKFILE_STRICT');
 
       // Child A acquires lock, signals ready, holds for 350ms, then releases
       const childAScript = `
@@ -311,6 +311,11 @@ async function run() {
     const tamperedSnippet = { ...genuineItem, sourceSnippetSha256: 'c'.repeat(64) };
     assert.strictEqual(isFdVerifiedEvidenceItem(tamperedSnippet), false, 'Tampered snippet hash MUST invalidate genuine token');
 
+    // Attack C1: Missing emittedContentSha256 MUST fail isFdVerifiedEvidenceItem
+    const missingEmitted = { ...genuineItem };
+    delete missingEmitted.emittedContentSha256;
+    assert.strictEqual(isFdVerifiedEvidenceItem(missingEmitted), false, 'Missing emittedContentSha256 MUST fail verification');
+
     // Attack C2: Keep sourceSnippetSha256 intact but mutate emitted snippet body -> emittedHash !== sourceSnippetSha256
     const injectedCode = '// injected malicious code\n' + genuineItem.rawSnippet;
     const mutatedBodyItem = { ...genuineItem, rawSnippet: injectedCode, snippet: injectedCode };
@@ -382,32 +387,38 @@ async function run() {
     const recoverLockPath = `${lockFilePath}.recover`;
     const lockBindingPath = path.resolve(__dirname, '../services/isolation_boundary.js');
     try {
-      // 1. Live holder held longer than staleLockMs (50ms) MUST NOT be evicted
-      const holderA = createCrossProcessFileLockBinding({ lockFilePath, staleLockMs: 50, retryIntervalMs: 10 });
-      const contenderB = createCrossProcessFileLockBinding({ lockFilePath, staleLockMs: 50, retryIntervalMs: 10 });
+      // 1. Strict default mode fails closed on dead lockfile (never deletes another process's lockfile)
+      const strictLock = createCrossProcessFileLockBinding({ lockFilePath, retryIntervalMs: 10 });
+      assert.strictEqual(strictLock.lockSemantics, 'CROSS_PROCESS_ATOMIC_LOCKFILE_STRICT');
+      fs.writeFileSync(lockFilePath, JSON.stringify({ pid: 99999994, ownerToken: 'dead-strict', fd: 1, mode: 'EXCLUSIVE', acquiredAt: Date.now() - 1000 }), 'utf-8');
+      assert.strictEqual(strictLock.acquireLock(9, 'EXCLUSIVE', 60), false, 'Strict mode must fail closed and never delete foreign lockfiles');
+      fs.unlinkSync(lockFilePath);
+
+      // 2. Opt-in best-effort recovery mode: live holder held longer than staleLockMs (50ms) MUST NOT be evicted
+      const holderA = createCrossProcessFileLockBinding({ lockFilePath, allowBestEffortCrashRecovery: true, staleLockMs: 50, retryIntervalMs: 10 });
+      const contenderB = createCrossProcessFileLockBinding({ lockFilePath, allowBestEffortCrashRecovery: true, staleLockMs: 50, retryIntervalMs: 10 });
+      assert.strictEqual(holderA.lockSemantics, 'CROSS_PROCESS_ATOMIC_LOCKFILE_BEST_EFFORT_RECOVERY');
       assert.strictEqual(holderA.acquireLock(1, 'EXCLUSIVE', 200), true);
       await new Promise(r => setTimeout(r, 80));
       assert.strictEqual(contenderB.acquireLock(2, 'EXCLUSIVE', 60), false, 'Live PID holder MUST NOT be evicted past staleLockMs');
 
-      // 2. Old holder with mismatched ownerToken CANNOT delete a new holder's lockfile
+      // 3. Old holder with mismatched ownerToken CANNOT delete a new holder's lockfile
       const newOwnerContent = JSON.stringify({ pid: process.pid, ownerToken: 'new-owner-token-xyz', fd: 99, mode: 'EXCLUSIVE', acquiredAt: Date.now() });
       fs.writeFileSync(lockFilePath, newOwnerContent, 'utf-8');
       assert.strictEqual(holderA.releaseLock(1), false, 'Old holder MUST NOT unlink lockfile owned by different ownerToken');
       assert.strictEqual(fs.existsSync(lockFilePath), true, 'New holder lockfile must remain intact');
 
-      // 3. Dead .recover crash recovery: plant BOTH a dead .recover mutex AND a dead main lockfile
+      // 4. Dead .recover crash recovery: plant BOTH a dead .recover mutex AND a dead main lockfile
       fs.writeFileSync(recoverLockPath, JSON.stringify({ pid: 99999998, ownerToken: 'dead-recover', acquiredAt: Date.now() - 1000 }), 'utf-8');
       fs.writeFileSync(lockFilePath, JSON.stringify({ pid: 99999999, ownerToken: 'dead-main', fd: 1, mode: 'EXCLUSIVE', acquiredAt: Date.now() - 1000 }), 'utf-8');
       assert.strictEqual(contenderB.acquireLock(3, 'EXCLUSIVE', 400), true, 'Must recover dead .recover mutex AND dead main lockfile');
       assert.strictEqual(contenderB.releaseLock(3), true);
 
-      // 4. True two-process concurrent recovery race on a dead-PID lockfile:
-      // Plant dead lockfile; spawn 2 independent OS processes racing to recover & acquire (timeout 120ms, hold 300ms).
-      // Exactly ONE must win (WIN) and the other must be blocked (LOSE).
+      // 5. True two-process concurrent recovery race on a dead-PID lockfile (best-effort recovery opt-in):
       fs.writeFileSync(lockFilePath, JSON.stringify({ pid: 99999997, ownerToken: 'dead-race', fd: 1, mode: 'EXCLUSIVE', acquiredAt: Date.now() - 1000 }), 'utf-8');
       const racerScript = `
         const { createCrossProcessFileLockBinding } = require(${JSON.stringify(lockBindingPath)});
-        const b = createCrossProcessFileLockBinding({ lockFilePath: ${JSON.stringify(lockFilePath)}, retryIntervalMs: 10 });
+        const b = createCrossProcessFileLockBinding({ lockFilePath: ${JSON.stringify(lockFilePath)}, allowBestEffortCrashRecovery: true, retryIntervalMs: 10 });
         const ok = b.acquireLock(1, 'EXCLUSIVE', 120);
         if (!ok) {
           process.stdout.write('LOSE');
@@ -512,6 +523,31 @@ async function run() {
       tm.submitTask(
         { objective: 'Bad getter', tier: 'high', code_context: getterObj },
         { idempotencyKey: 'fi-idem-bad-getter' }
+      );
+    }, (err) => err.statusCode === 400 && err.type === 'INVALID_PARAMETER');
+
+    // Array with getter element must be rejected WITHOUT executing the getter
+    let arrGetterExecuted = false;
+    const arrWithGetter = [1];
+    Object.defineProperty(arrWithGetter, '0', {
+      enumerable: true,
+      get() { arrGetterExecuted = true; return 1; }
+    });
+    assert.throws(() => {
+      tm.submitTask(
+        { objective: 'Bad array getter', tier: 'high', code_context: arrWithGetter },
+        { idempotencyKey: 'fi-idem-bad-arr-getter' }
+      );
+    }, (err) => err.statusCode === 400 && err.type === 'INVALID_PARAMETER');
+    assert.strictEqual(arrGetterExecuted, false, 'Array element getter MUST NOT be executed');
+
+    // Array with non-enumerable custom property must be rejected
+    const arrWithHidden = [1, 2];
+    Object.defineProperty(arrWithHidden, 'hidden', { value: 3, enumerable: false });
+    assert.throws(() => {
+      tm.submitTask(
+        { objective: 'Bad hidden array prop', tier: 'high', code_context: arrWithHidden },
+        { idempotencyKey: 'fi-idem-bad-arr-hidden' }
       );
     }, (err) => err.statusCode === 400 && err.type === 'INVALID_PARAMETER');
   });
