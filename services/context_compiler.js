@@ -587,6 +587,7 @@ class ContextCompiler {
         proofEntry.symbol === item.symbol &&
         proofEntry.fileSha256 === item.sourceFileSha256 &&
         proofEntry.snippetSha256 === item.sourceSnippetSha256 &&
+        emittedHash === proofEntry.snippetSha256 &&
         Array.isArray(item.lineRange) &&
         proofEntry.startLine === item.lineRange[0] &&
         proofEntry.endLine === item.lineRange[1]

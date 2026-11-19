@@ -570,25 +570,59 @@ function createCrossProcessFileLockBinding(options = {}) {
   }
 
   function tryRecoverDeadRecoverMutex() {
+    // Pre-check before touching the path so we never disturb an obviously live .recover holder
+    let preStat;
+    let preParsed = null;
     try {
-      const stat = fs.statSync(recoverLockPath);
-      let parsed = null;
+      preStat = fs.statSync(recoverLockPath);
       try {
-        parsed = JSON.parse(fs.readFileSync(recoverLockPath, 'utf-8'));
+        preParsed = JSON.parse(fs.readFileSync(recoverLockPath, 'utf-8'));
       } catch (_) {
-        if (Date.now() - stat.mtimeMs > staleLockMs) {
-          try { fs.unlinkSync(recoverLockPath); return true; } catch (__) { return false; }
-        }
+        if (Date.now() - preStat.mtimeMs <= staleLockMs) return false;
+      }
+      if (preParsed && Number.isInteger(preParsed.pid) && isPidAlive(preParsed.pid)) {
         return false;
       }
-      // NEVER evict a live .recover holder
-      if (parsed && Number.isInteger(parsed.pid) && !isPidAlive(parsed.pid)) {
-        try { fs.unlinkSync(recoverLockPath); return true; } catch (_) { return false; }
-      }
     } catch (_) {
-      // .recover already removed
+      return false;
     }
-    return false;
+
+    // Atomic quarantine rename: only ONE contender can move this exact file instance;
+    // eliminates the read-dead -> unlink-new-holder TOCTOU race.
+    const quarantinePath = `${recoverLockPath}.quarantine.${process.pid}.${crypto.randomBytes(8).toString('hex')}`;
+    try {
+      fs.renameSync(recoverLockPath, quarantinePath);
+    } catch (_) {
+      // Another process already moved/unlinked it
+      return false;
+    }
+
+    try {
+      const qStat = fs.statSync(quarantinePath);
+      let qParsed = null;
+      try {
+        qParsed = JSON.parse(fs.readFileSync(quarantinePath, 'utf-8'));
+      } catch (_) {
+        if (Date.now() - qStat.mtimeMs > staleLockMs) {
+          try { fs.unlinkSync(quarantinePath); return true; } catch (__) { return false; }
+        }
+        // Not stale enough -> restore atomically if path is empty
+        try { fs.linkSync(quarantinePath, recoverLockPath); } catch (__) {}
+        try { fs.unlinkSync(quarantinePath); } catch (__) {}
+        return false;
+      }
+      if (qParsed && Number.isInteger(qParsed.pid) && !isPidAlive(qParsed.pid)) {
+        // Confirmed dead PID on the quarantined file itself -> safe to delete
+        try { fs.unlinkSync(quarantinePath); return true; } catch (_) { return false; }
+      }
+      // Race detected: the file we renamed belongs to a live holder -> restore immediately
+      try { fs.linkSync(quarantinePath, recoverLockPath); } catch (_) {}
+      try { fs.unlinkSync(quarantinePath); } catch (_) {}
+      return false;
+    } catch (_) {
+      try { fs.unlinkSync(quarantinePath); } catch (__) {}
+      return false;
+    }
   }
 
   function withRecoveryMutex(fn, timeoutMs = 1500) {
@@ -1091,6 +1125,7 @@ function isFdVerifiedEvidenceItem(item) {
     item.filePath === token.logicalFilePath &&
     item.sourceFileSha256 === token.fileSha256 &&
     item.sourceSnippetSha256 === token.sourceSnippetSha256 &&
+    (!item.emittedContentSha256 || item.emittedContentSha256 === token.sourceSnippetSha256) &&
     item.symbol === token.symbol &&
     Array.isArray(item.lineRange) &&
     item.lineRange.length === 2 &&

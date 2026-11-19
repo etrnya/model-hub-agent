@@ -193,16 +193,57 @@ class TaskManager {
           err.statusCode = 400;
           throw err;
         }
-        if (val instanceof Date || val instanceof Map || val instanceof Set || val instanceof RegExp || Buffer.isBuffer(val)) {
-          const err = new Error(`INVALID_PARAMETER: Non-JSON object instance (${val.constructor.name}) is not allowed in idempotent payload.`);
+        if (Array.isArray(val)) {
+          if (Object.getOwnPropertySymbols(val).length > 0 || Object.keys(val).length !== val.length) {
+            const err = new Error('INVALID_PARAMETER: Sparse arrays or arrays with custom properties are not allowed in idempotent payload.');
+            err.type = 'INVALID_PARAMETER';
+            err.statusCode = 400;
+            throw err;
+          }
+          seenObjects.add(val);
+          try {
+            const out = [];
+            for (let i = 0; i < val.length; i++) {
+              if (!Object.prototype.hasOwnProperty.call(val, i)) {
+                const err = new Error('INVALID_PARAMETER: Sparse arrays are not allowed in idempotent payload.');
+                err.type = 'INVALID_PARAMETER';
+                err.statusCode = 400;
+                throw err;
+              }
+              out.push(canonicalize(val[i]));
+            }
+            return ['A', out];
+          } finally {
+            seenObjects.delete(val);
+          }
+        }
+        const proto = Object.getPrototypeOf(val);
+        if (proto !== Object.prototype && proto !== null) {
+          const typeName = (val.constructor && val.constructor.name) || 'NonPlainObject';
+          const err = new Error(`INVALID_PARAMETER: Non-plain object instance (${typeName}) is not allowed in idempotent payload.`);
+          err.type = 'INVALID_PARAMETER';
+          err.statusCode = 400;
+          throw err;
+        }
+        if (Object.getOwnPropertySymbols(val).length > 0) {
+          const err = new Error('INVALID_PARAMETER: Symbol keys are not allowed in idempotent payload.');
           err.type = 'INVALID_PARAMETER';
           err.statusCode = 400;
           throw err;
         }
         seenObjects.add(val);
         try {
-          if (Array.isArray(val)) return ['A', val.map(canonicalize)];
-          const entries = Object.keys(val).sort().map(k => [k, canonicalize(val[k])]);
+          const keys = Object.keys(val).sort();
+          const entries = keys.map(k => {
+            const desc = Object.getOwnPropertyDescriptor(val, k);
+            if (desc && (desc.get || desc.set)) {
+              const err = new Error(`INVALID_PARAMETER: Accessor property '${k}' is not allowed in idempotent payload.`);
+              err.type = 'INVALID_PARAMETER';
+              err.statusCode = 400;
+              throw err;
+            }
+            return [k, canonicalize(val[k])];
+          });
           return ['O', entries];
         } finally {
           seenObjects.delete(val);

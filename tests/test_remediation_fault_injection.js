@@ -311,6 +311,39 @@ async function run() {
     const tamperedSnippet = { ...genuineItem, sourceSnippetSha256: 'c'.repeat(64) };
     assert.strictEqual(isFdVerifiedEvidenceItem(tamperedSnippet), false, 'Tampered snippet hash MUST invalidate genuine token');
 
+    // Attack C2: Keep sourceSnippetSha256 intact but mutate emitted snippet body -> emittedHash !== sourceSnippetSha256
+    const injectedCode = '// injected malicious code\n' + genuineItem.rawSnippet;
+    const mutatedBodyItem = { ...genuineItem, rawSnippet: injectedCode, snippet: injectedCode };
+    const mutatedAdmissionEngine = {
+      async evaluateAdmission() {
+        return {
+          admittedEvidence: [mutatedBodyItem],
+          rejectedEvidence: [],
+          summary: { totalInput: 1 },
+          aggregateEvidenceStatus: 'SOURCE_MATCHED',
+          evaluatedItemsHash: 'a'.repeat(64)
+        };
+      },
+      computeAggregateEvidenceStatus() { return 'SOURCE_MATCHED'; },
+      computeEvaluatedItemsHash() { return 'a'.repeat(64); }
+    };
+    const mutatedCompiler = new ContextCompiler({
+      admissionEngine: mutatedAdmissionEngine,
+      tokenBudgetGuard: new TokenBudgetGuard(),
+      guardrailManager,
+      codeGraphAdapter: realAdapter
+    });
+    const mutatedRes = await mutatedCompiler.compileIsolatedEnvelope(
+      { taskId: 'task-fi-8-mut', targetNodes: [{ id: 'ev-real-origin' }], snapshotId: 'snap-real-fi8' },
+      { taskId: 'task-fi-8-mut', tenantId: 'tenant-fi', taskType: 'FEATURE_DEV' },
+      { snapshotId: 'snap-real-fi8' }
+    );
+    assert.strictEqual(
+      mutatedRes.envelope.isolationTier,
+      'TIER_2_JS_ISOLATED',
+      'Mutating snippet body while keeping sourceSnippetSha256 MUST fail emittedHash check and downgrade to TIER_2_JS_ISOLATED'
+    );
+
     // Attack D: Feed transplanted item + forged options.fdSnapshotVerified=true into ContextCompiler
     const fakeAdmissionEngine = {
       async evaluateAdmission() {
@@ -398,6 +431,15 @@ async function run() {
       const loses = [res1, res2].filter(r => r === 'LOSE').length;
       assert.strictEqual(wins, 1, `Expected exactly 1 winner in concurrent recovery race, got: [${res1}, ${res2}]`);
       assert.strictEqual(loses, 1, `Expected exactly 1 blocked contender in concurrent recovery race, got: [${res1}, ${res2}]`);
+
+      // 5. True two-process concurrent recovery race when BOTH .recover AND main lockfile are dead:
+      fs.writeFileSync(recoverLockPath, JSON.stringify({ pid: 99999995, ownerToken: 'dead-rec-race', acquiredAt: Date.now() - 1000 }), 'utf-8');
+      fs.writeFileSync(lockFilePath, JSON.stringify({ pid: 99999996, ownerToken: 'dead-main-race', fd: 1, mode: 'EXCLUSIVE', acquiredAt: Date.now() - 1000 }), 'utf-8');
+      const [recRes1, recRes2] = await Promise.all([runRacer(), runRacer()]);
+      const recWins = [recRes1, recRes2].filter(r => r === 'WIN').length;
+      const recLoses = [recRes1, recRes2].filter(r => r === 'LOSE').length;
+      assert.strictEqual(recWins, 1, `Expected exactly 1 winner in dead .recover + main race, got: [${recRes1}, ${recRes2}]`);
+      assert.strictEqual(recLoses, 1, `Expected exactly 1 blocked contender in dead .recover + main race, got: [${recRes1}, ${recRes2}]`);
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
@@ -442,6 +484,34 @@ async function run() {
       tm.submitTask(
         { objective: 'Bad date', tier: 'high', code_context: new Date() },
         { idempotencyKey: 'fi-idem-bad-date' }
+      );
+    }, (err) => err.statusCode === 400 && err.type === 'INVALID_PARAMETER');
+
+    class CustomPayload {
+      constructor() { this.x = 1; }
+    }
+    assert.throws(() => {
+      tm.submitTask(
+        { objective: 'Bad class instance', tier: 'high', code_context: new CustomPayload() },
+        { idempotencyKey: 'fi-idem-bad-class' }
+      );
+    }, (err) => err.statusCode === 400 && err.type === 'INVALID_PARAMETER');
+
+    const symObj = {};
+    symObj[Symbol('hidden')] = 'secret';
+    assert.throws(() => {
+      tm.submitTask(
+        { objective: 'Bad symbol key', tier: 'high', code_context: symObj },
+        { idempotencyKey: 'fi-idem-bad-sym' }
+      );
+    }, (err) => err.statusCode === 400 && err.type === 'INVALID_PARAMETER');
+
+    const getterObj = {};
+    Object.defineProperty(getterObj, 'dyn', { enumerable: true, get() { return 1; } });
+    assert.throws(() => {
+      tm.submitTask(
+        { objective: 'Bad getter', tier: 'high', code_context: getterObj },
+        { idempotencyKey: 'fi-idem-bad-getter' }
       );
     }, (err) => err.statusCode === 400 && err.type === 'INVALID_PARAMETER');
   });
